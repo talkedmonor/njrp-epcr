@@ -186,7 +186,7 @@ function seed() {
     const incident = {
       pcrId, cadNumber: cad, unit, crew: "J. Reyes, EMT-P / S. Cole, EMT",
       primaryProvider: "Jordan Reyes", incidentType: type, priority,
-      incidentDate: updated.slice(0, 10), status,
+      incidentDate: updated.slice(0, 10), agencies: "NJRP EMS, County Fire, Local Law Enforcement", status,
     };
     const result = reportInsert.run(pcrId, cad, provider.id, status, type, unit, priority, updated.slice(0, 10), JSON.stringify(incident), updated);
     const reportId = Number(result.lastInsertRowid);
@@ -328,7 +328,7 @@ app.get("/api/reports/:id", auth, (req, res) => {
 app.post("/api/reports", auth, (req, res) => {
   const seq = db.prepare("SELECT COALESCE(MAX(id),0)+1 AS next FROM pcr_reports").get().next;
   const pcrId = `PCR-2026-${String(10020 + seq).padStart(5, "0")}`;
-  const incident = { pcrId, cadNumber: "", unit: "", crew: req.user.name, primaryProvider: req.user.name, incidentType: "", priority: "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft" };
+  const incident = { pcrId, cadNumber: "", unit: "", crew: req.user.name, primaryProvider: req.user.name, agencies: "", incidentType: "", priority: "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft" };
   const result = db.prepare(`INSERT INTO pcr_reports (pcr_id,cad_number,owner_id,status,incident_type,unit,priority,incident_date,data,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
     .run(pcrId, "", req.user.id, "Draft", "", "", "2-Urgent", incident.incidentDate, JSON.stringify(incident), now());
   const id = Number(result.lastInsertRowid);
@@ -515,14 +515,47 @@ function ensurePdfSpace(doc, y, needed, reportId) {
 function pdfKeyValues(doc, entries, y) {
   const width = 540;
   const colWidth = width / 2;
-  entries.forEach(([label, value], index) => {
-    const x = 36 + (index % 2) * colWidth;
-    const rowY = y + Math.floor(index / 2) * 27;
-    doc.fillColor("#6b7780").font("Helvetica-Bold").fontSize(7).text(label.toUpperCase(), x + 8, rowY + 2, { width: colWidth - 16 });
-    doc.fillColor("#172b3d").font("Helvetica").fontSize(9).text(String(value || "-"), x + 8, rowY + 12, { width: colWidth - 16 });
-    doc.moveTo(x, rowY + 26).lineTo(x + colWidth, rowY + 26).strokeColor("#d9dfe4").lineWidth(.5).stroke();
+  for (let index = 0; index < entries.length; index += 2) {
+    const pair = entries.slice(index, index + 2);
+    const heights = pair.map(([, value]) => {
+      doc.font("Helvetica").fontSize(9);
+      return Math.max(27, 14 + doc.heightOfString(String(value || "-"), { width: colWidth - 16 }));
+    });
+    const rowHeight = Math.max(...heights);
+    pair.forEach(([label, value], pairIndex) => {
+      const x = 36 + pairIndex * colWidth;
+      doc.fillColor("#6b7780").font("Helvetica-Bold").fontSize(7).text(label.toUpperCase(), x + 8, y + 2, { width: colWidth - 16 });
+      doc.fillColor("#172b3d").font("Helvetica").fontSize(9).text(String(value || "-"), x + 8, y + 12, { width: colWidth - 16 });
+      doc.moveTo(x, y + rowHeight - 1).lineTo(x + colWidth, y + rowHeight - 1).strokeColor("#d9dfe4").lineWidth(.5).stroke();
+    });
+    y += rowHeight;
+  }
+  return y + 6;
+}
+
+function pdfParagraph(doc, reportId, title, text, y, minHeight = 80) {
+  y = ensurePdfSpace(doc, y, minHeight, reportId);
+  y = section(doc, title, y);
+  doc.fillColor("#172b3d").font("Helvetica").fontSize(8.5).text(String(text || "Not documented."), 44, y, { width: 524, lineGap: 2 });
+  return doc.y + 14;
+}
+
+function pdfListRows(doc, reportId, title, rows, y, emptyText) {
+  y = ensurePdfSpace(doc, y, 70, reportId);
+  y = section(doc, title, y);
+  doc.fontSize(8);
+  if (!rows.length) {
+    doc.fillColor("#172b3d").font("Helvetica").text(emptyText, 44, y);
+    return y + 20;
+  }
+  rows.forEach((row, index) => {
+    y = ensurePdfSpace(doc, y, 36, reportId);
+    if (index % 2) doc.rect(36, y - 4, 540, 30).fill("#f8fafb");
+    doc.fillColor("#172b3d").font("Helvetica-Bold").text(row[0] || "-", 44, y, { width: 140 });
+    doc.font("Helvetica").text(row[1] || "-", 190, y, { width: 378, lineGap: 1 });
+    y = Math.max(doc.y, y + 22) + 6;
   });
-  return y + Math.ceil(entries.length / 2) * 27 + 6;
+  return y + 4;
 }
 
 app.get("/api/reports/:id/pdf", auth, (req, res) => {
@@ -537,20 +570,27 @@ app.get("/api/reports/:id/pdf", auth, (req, res) => {
   doc.pipe(res);
   pdfHeader(doc, "Patient Care Report", report.pcrId);
   let y = 90;
-  y = section(doc, "Incident", y);
+  y = section(doc, "Run identifiers & response", y);
   y = pdfKeyValues(doc, [
     ["PCR ID", report.pcrId], ["Status", report.status], ["CAD number", report.incident.cadNumber], ["Incident date", report.incident.incidentDate],
     ["Unit", report.incident.unit], ["Priority", report.incident.priority], ["Incident type", report.incident.incidentType], ["Primary provider", report.incident.primaryProvider],
-    ["Crew", report.incident.crew], ["Last updated", report.updatedAt],
+    ["Crew", report.incident.crew], ["Agencies on call", report.incident.agencies], ["Provider agency", report.providerName], ["Last updated", report.updatedAt],
   ], y);
-  y = section(doc, "Patient", y);
+  y = ensurePdfSpace(doc, y, 120, report.pcrId);
+  y = section(doc, "Patient demographics & history", y);
   y = pdfKeyValues(doc, [
     ["Patient name", report.patient.patientName], ["DOB / age", `${report.patient.dob || "-"} / ${report.patient.age || "-"}`],
     ["Sex", report.patient.sex], ["Weight", report.patient.weight], ["Chief complaint", report.patient.chiefComplaint], ["Allergies", report.patient.allergies],
     ["Medications", report.patient.medications], ["Medical history", report.patient.pastMedicalHistory],
   ], y);
+  y = ensurePdfSpace(doc, y, 125, report.pcrId);
+  y = section(doc, "CAD / response timeline", y);
+  y = pdfKeyValues(doc, [
+    ["Dispatched", report.times.dispatched], ["En route", report.times.enroute], ["On scene", report.times.onScene], ["Patient contact", report.times.patientContact],
+    ["Depart scene", report.times.departScene], ["At destination", report.times.atDestination], ["Transfer of care", report.times.transferOfCare], ["Available", report.times.available],
+  ], y);
   y = ensurePdfSpace(doc, y, 155, report.pcrId);
-  y = section(doc, "Assessment", y);
+  y = section(doc, "Assessment findings", y);
   y = pdfKeyValues(doc, [
     ["Mental status", report.assessment.mentalStatus], ["AVPU / GCS", `${report.assessment.avpu || "-"} / ${report.assessment.gcs || "-"}`],
     ["Airway", report.assessment.airway], ["Breathing", report.assessment.breathing], ["Circulation", report.assessment.circulation], ["Skin", report.assessment.skin],
@@ -569,27 +609,53 @@ app.get("/api/reports/:id/pdf", auth, (req, res) => {
     values.forEach((value, column) => doc.fillColor("#172b3d").font("Helvetica").fontSize(7.5).text(String(value || "-"), vitalCols[column] + 3, y + 6, { width: column === 10 ? 88 : 42 }));
     y += 19;
   });
+  if (!report.vitals.length) { doc.fillColor("#172b3d").font("Helvetica").fontSize(8).text("No vital signs documented.", 44, y); y += 18; }
   y += 8;
-  y = ensurePdfSpace(doc, y, 145, report.pcrId);
-  y = section(doc, "Medications & Interventions", y);
-  doc.fontSize(8);
-  report.medications.forEach((m) => { doc.fillColor("#172b3d").font("Helvetica-Bold").text(`${m.time || "-"}  ${m.medication || "-"} ${m.dose || ""} ${m.route || ""}`, 44, y, { width: 230 }); doc.font("Helvetica").text(m.response || m.indication || "-", 286, y, { width: 282 }); y += 17; });
-  if (!report.medications.length) { doc.font("Helvetica").text("No medications documented.", 44, y); y += 17; }
-  report.interventions.forEach((i) => { doc.fillColor("#172b3d").font("Helvetica-Bold").text(`${i.time || "-"}  ${i.intervention || "-"}`, 44, y, { width: 230 }); doc.font("Helvetica").text(i.response || i.notes || "-", 286, y, { width: 282 }); y += 17; });
-  if (!report.interventions.length) { doc.font("Helvetica").text("No interventions documented.", 44, y); y += 17; }
-  y += 8;
-  y = ensurePdfSpace(doc, y, 180, report.pcrId);
-  y = section(doc, "Medical Abstract", y);
-  doc.fillColor("#172b3d").font("Helvetica").fontSize(8.5).text(report.narrative.medicalAbstract || "No medical abstract generated.", 44, y, { width: 524, lineGap: 2 });
-  y = doc.y + 14;
-  y = ensurePdfSpace(doc, y, 220, report.pcrId);
-  y = section(doc, "Narrative", y);
-  doc.fontSize(8.5).text(report.narrative.full || "No narrative documented.", 44, y, { width: 524, lineGap: 2 });
-  y = doc.y + 16;
+  y = pdfListRows(doc, report.pcrId, "Medication administration record", report.medications.map((m) => [
+    `${m.time || "-"}  ${m.medication || "-"} ${m.dose || ""} ${m.route || ""}`,
+    `Indication: ${m.indication || "-"} | Checks: ${m.contraindications || "-"} | Response: ${m.response || "-"} | By: ${m.administeredBy || "-"} | Notes: ${m.notes || "-"}`
+  ]), y, "No medications documented.");
+  y = pdfListRows(doc, report.pcrId, "Procedures & interventions", report.interventions.map((i) => [
+    `${i.time || "-"}  ${i.intervention || "-"}`,
+    `Successful: ${i.successful || "-"} | Performed by: ${i.performedBy || "-"} | Response: ${i.response || "-"} | Notes: ${i.notes || "-"}`
+  ]), y, "No procedures or interventions documented.");
+  y = pdfParagraph(doc, report.pcrId, "OPQRST", report.assessment.opqrst, y, 80);
+  y = pdfParagraph(doc, report.pcrId, "SAMPLE history", report.assessment.sample, y, 80);
+  y = pdfParagraph(doc, report.pcrId, "Physical exam", report.assessment.physicalExam, y, 100);
+  y = pdfParagraph(doc, report.pcrId, "Medical abstract", report.narrative.medicalAbstract || "No medical abstract generated.", y, 120);
+  y = pdfParagraph(doc, report.pcrId, "Dispatch narrative", report.narrative.dispatch, y, 90);
+  y = pdfParagraph(doc, report.pcrId, "Arrival narrative", report.narrative.arrival, y, 90);
+  y = pdfParagraph(doc, report.pcrId, "Assessment narrative", report.narrative.assessment, y, 100);
+  y = pdfParagraph(doc, report.pcrId, "Treatment narrative", report.narrative.treatment, y, 100);
+  y = pdfParagraph(doc, report.pcrId, "Transport narrative", report.narrative.transport, y, 100);
+  y = pdfParagraph(doc, report.pcrId, "Full narrative", report.narrative.full || "No narrative documented.", y, 180);
+  const disposition = report.signatures?.[0] || {};
+  y = ensurePdfSpace(doc, y, 135, report.pcrId);
+  y = section(doc, "Disposition, transfer & signatures", y);
+  y = pdfKeyValues(doc, [
+    ["Disposition", disposition.disposition], ["Destination", disposition.destination], ["Transfer of care to", disposition.transferTo], ["Provider signature", disposition.providerSignature],
+    ["Patient signature", disposition.patientSignature], ["Witness signature", disposition.witnessSignature],
+  ], y);
   y = ensurePdfSpace(doc, y, 100, report.pcrId);
   y = section(doc, "QA / Approval", y);
-  doc.fontSize(8.5).text(`Status: ${report.status}   Primary provider: ${report.providerName}`, 44, y);
-  doc.text(report.qaComments[0] ? `Latest QA note: ${report.qaComments[0].comment}` : "No QA comments.", 44, y + 16, { width: 524 });
+  doc.fontSize(8.5).text(`Status: ${report.status}   Primary provider: ${report.providerName}   Submitted: ${report.submittedAt || "-"}`, 44, y, { width: 524 });
+  y += 18;
+  if (report.qaComments.length) {
+    report.qaComments.forEach((q) => { y = ensurePdfSpace(doc, y, 28, report.pcrId); doc.font("Helvetica-Bold").text(`${q.type || "Comment"} - ${q.author || "Reviewer"} - ${q.created_at || ""}`, 44, y); doc.font("Helvetica").text(q.comment || "-", 44, y + 11, { width: 524 }); y = doc.y + 10; });
+  } else {
+    doc.font("Helvetica").text("No QA comments.", 44, y); y += 22;
+  }
+  y = pdfParagraph(doc, report.pcrId, "Record attestation", "This electronic patient care report documents the information available to the crew at the time of the roleplay/training encounter. Entries should be reviewed for completeness, accuracy, chronology, signatures, medication checks, reassessment after interventions, and transfer-of-care documentation before final QA approval.", y, 110);
+  y = pdfListRows(doc, report.pcrId, "PCR completion checklist", [
+    ["Response timeline", "Dispatch, en route, on-scene, patient contact, transport, transfer-of-care, and available times reviewed."],
+    ["Clinical reassessment", "Serial vitals and response to medication/interventions reviewed for consistency."],
+    ["Medication safety", "Indications, contraindication checks, dose, route, time, provider, and patient response reviewed."],
+    ["Disposition", "Destination, transfer-of-care recipient, and electronic signatures reviewed."],
+  ], y, "Checklist not documented.");
+  y = pdfListRows(doc, report.pcrId, "Audit trail", report.audit.slice(0, 8).map((item) => [
+    `${item.created_at || "-"}  ${item.action || "Audit event"}`,
+    `${item.user_name || "System"} - ${item.detail || "-"}`
+  ]), y, "No audit trail entries.");
   const range = doc.bufferedPageRange();
   for (let page = range.start; page < range.start + range.count; page++) {
     doc.switchToPage(page);

@@ -253,6 +253,7 @@ function IncidentTab({ report, update, readOnly }) {
     <Field label="PCR ID" value={report.pcrId} disabled /><Field label="CAD call number" value={data.cadNumber} onChange={(v) => set("cadNumber", v)} disabled={readOnly} />
     <Field label="Unit" value={data.unit} onChange={(v) => set("unit", v)} disabled={readOnly} /><Field label="Primary provider" value={data.primaryProvider} onChange={(v) => set("primaryProvider", v)} disabled={readOnly} />
     <Field label="Crew" value={data.crew} onChange={(v) => set("crew", v)} disabled={readOnly} span={2} />
+    <Field label="Agencies on call" value={data.agencies} onChange={(v) => set("agencies", v)} disabled={readOnly} span={2} placeholder="Example: NJRP EMS, County Fire, State Police" />
     <Field label="Incident type" value={data.incidentType} onChange={(v) => set("incidentType", v)} disabled={readOnly} options={["", "Chest Pain", "Motor Vehicle Collision", "Overdose / Poisoning", "Difficulty Breathing", "Fall", "Behavioral Emergency", "Sick Person", "Traumatic Injury"]} />
     <Field label="Response priority" value={data.priority} onChange={(v) => set("priority", v)} disabled={readOnly} options={["1-Emergent", "2-Urgent", "3-Routine"]} />
     <Field label="Incident date" value={data.incidentDate} onChange={(v) => set("incidentDate", v)} disabled={readOnly} type="date" /><Field label="Report status" value={report.status} disabled />

@@ -113,7 +113,7 @@ select
   'Medic 12',
   '1-Emergent',
   '2026-06-23',
-  '{"pcrId":"PCR-2026-10021","cadNumber":"CAD-260623-0412","unit":"Medic 12","crew":"J. Reyes, EMT-P / S. Cole, EMT","primaryProvider":"Jordan Reyes","incidentType":"Chest Pain","priority":"1-Emergent","incidentDate":"2026-06-23","status":"Draft"}'::jsonb,
+  '{"pcrId":"PCR-2026-10021","cadNumber":"CAD-260623-0412","unit":"Medic 12","crew":"J. Reyes, EMT-P / S. Cole, EMT","primaryProvider":"Jordan Reyes","agencies":"NJRP EMS, County Fire, Local Law Enforcement","incidentType":"Chest Pain","priority":"1-Emergent","incidentDate":"2026-06-23","status":"Draft"}'::jsonb,
   '{"patientName":"Avery Thompson","age":64,"dob":"1966-04-12","sex":"Male","weight":"82 kg","chiefComplaint":"Chest pressure","allergies":"NKDA","medications":"See medication list","pastMedicalHistory":"Hypertension"}'::jsonb,
   '{"dispatched":"08:32","enroute":"08:35","onScene":"08:42","patientContact":"08:45","departScene":"09:08","atDestination":"09:24","transferOfCare":"09:39","available":"09:54"}'::jsonb,
   '{"mentalStatus":"Alert and oriented x4","avpu":"Alert","gcs":"15","airway":"Patent","breathing":"Even and unlabored","circulation":"Radial pulses strong and regular","skin":"Warm, dry, normal color","pupils":"PERRL 3 mm","lungSounds":"Clear bilaterally","painScale":"7/10","impression":"Chest Pain","physicalExam":"No obvious trauma. Head-to-toe assessment completed without additional acute findings.","opqrst":"Onset with activity; pressure-like; non-radiating; 7/10; began 30 minutes prior.","sample":"Symptoms as documented; NKDA; medications reviewed; last oral intake 0700; event while walking."}'::jsonb,
