@@ -496,6 +496,7 @@ body { background: var(--canvas); font-family: Arial, Helvetica, sans-serif; fon
 .elite-commandbar > button.elite-approve { background: linear-gradient(#52b73c,#247d20); min-width: 72px; }
 .elite-commandbar > button.elite-return { background: linear-gradient(#f2a12a,#bc6c00); min-width: 70px; }
 .elite-commandbar > button.elite-lock { background: linear-gradient(#555,#252525); min-width: 64px; }
+.elite-commandbar > button.elite-delete { background: linear-gradient(#ed1919,#b50000); min-width: 68px; }
 .elite-commandbar > button.elite-close { background: linear-gradient(#ed1919,#b50000); }
 .classic-editor .editor-header { display: none; }
 .classic-workspace { display: grid; grid-template-columns: 292px minmax(0, 1fr) 64px; height: calc(100vh - 108px); min-height: 560px; background: #cfd1d3; border-top: 1px solid #525252; }

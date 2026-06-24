@@ -151,8 +151,9 @@ for (const user of legacyUsers) {
 }
 
 function ensureUser({ name, email, username, password, role }) {
-  const existing = db.prepare("SELECT id FROM users WHERE username=? OR email=?").get(username, email);
+  const existing = db.prepare("SELECT id FROM users WHERE email=?").get(email) || db.prepare("SELECT id FROM users WHERE username=?").get(username);
   if (existing) {
+    db.prepare("UPDATE users SET username=username || '_old_' || id WHERE username=? AND id<>?").run(username, existing.id);
     db.prepare("UPDATE users SET name=?,email=?,username=?,password_hash=?,role=?,active=1 WHERE id=?")
       .run(name, email, username, hash(password), role, existing.id);
     return;
@@ -168,7 +169,7 @@ function seed() {
     insert.run("Morgan Blake", "supervisor@njrp.local", "SupervisorDemo", hash("supervisor123"), "Supervisor");
     insert.run("Casey Park", "admin@njrp.local", "AdminDemo", hash("admin123"), "Admin");
   }
-  ensureUser({ name: "NJRP Master", email: "master@njrp.local", username: "NJRPMaster", password: "master2026!", role: "Admin" });
+  ensureUser({ name: "NJRP Master", email: "master@njrp.local", username: "Yoroblox372", password: "master2026!", role: "Admin" });
   if (db.prepare("SELECT COUNT(*) AS count FROM pcr_reports").get().count) return;
   const provider = db.prepare("SELECT id FROM users WHERE role='Provider'").get();
   const reports = [
@@ -365,6 +366,17 @@ app.put("/api/reports/:id", auth, (req, res) => {
   for (const signature of data.signatures || []) { const { id: ignored, ...clean } = signature; signatureInsert.run(id, JSON.stringify(clean)); }
   audit(req.user.id, id, "Saved draft", "Report content updated");
   res.json(reportDetail(id));
+});
+
+app.delete("/api/reports/:id", auth, (req, res) => {
+  if (req.user.role !== "Admin") return res.status(403).json({ error: "Admin access required" });
+  const id = Number(req.params.id);
+  const report = reportDetail(id);
+  if (!report) return res.status(404).json({ error: "Report not found" });
+  db.prepare("UPDATE audit_logs SET report_id=NULL WHERE report_id=?").run(id);
+  db.prepare("DELETE FROM pcr_reports WHERE id=?").run(id);
+  audit(req.user.id, null, "Deleted PCR", `${report.pcrId} deleted`);
+  res.json({ ok: true, deletedId: id });
 });
 
 app.post("/api/reports/:id/action", auth, (req, res) => {

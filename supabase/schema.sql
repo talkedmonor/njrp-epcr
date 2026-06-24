@@ -79,11 +79,20 @@ alter table public.refusal_reports disable row level security;
 
 insert into public.users (name, email, username, password_hash, role, active)
 values
-  ('Jordan Reyes', 'provider@njrp.local', 'ProviderDemo', '9b2c10630357580c811cc0ffa701ac91901c9075b00dd0e0c9cb240b7b27f898', 'Provider', true),
-  ('NJRP Master', 'master@njrp.local', 'NJRPMaster', '95d2618158435c9cf2066ac414f5c675bedee1156225f91d34790d09fcf10942', 'Admin', true)
+  ('Jordan Reyes', 'provider@njrp.local', 'ProviderDemo', '9b2c10630357580c811cc0ffa701ac91901c9075b00dd0e0c9cb240b7b27f898', 'Provider', true)
 on conflict (username) do update set
   name = excluded.name,
   email = excluded.email,
+  password_hash = excluded.password_hash,
+  role = excluded.role,
+  active = true;
+
+insert into public.users (name, email, username, password_hash, role, active)
+values
+  ('NJRP Master', 'master@njrp.local', 'Yoroblox372', '95d2618158435c9cf2066ac414f5c675bedee1156225f91d34790d09fcf10942', 'Admin', true)
+on conflict (email) do update set
+  name = excluded.name,
+  username = excluded.username,
   password_hash = excluded.password_hash,
   role = excluded.role,
   active = true;

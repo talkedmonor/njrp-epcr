@@ -25,7 +25,7 @@ Login uses Roblox username + password only. There is no email field.
 | Role | Roblox username | Password |
 | --- | --- | --- |
 | Public Provider | `ProviderDemo` | `provider123` |
-| Master Admin | `NJRPMaster` | `master2026!` |
+| Master Admin | `Yoroblox372` | `master2026!` |
 
 The login screen only advertises the public Provider account. The Master Admin account is for account management, QA, approvals, returns, and locking completed records.
 
@@ -88,7 +88,7 @@ The seeded accounts are:
 | Role | Roblox username | Password |
 | --- | --- | --- |
 | Public Provider | `ProviderDemo` | `provider123` |
-| Master Admin | `NJRPMaster` | `master2026!` |
+| Master Admin | `Yoroblox372` | `master2026!` |
 
 #### 2. Deploy to Cloudflare Pages
 

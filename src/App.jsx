@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronRight, ClipboardCheck, ClipboardList, Clock3, FileClock, FilePlus2,
   FileText, Gauge, History, LayoutDashboard, LockKeyhole, LogOut, Menu, MessageSquareText,
   MoreHorizontal, Plus, Printer, RefreshCw, Search, ShieldCheck, Stethoscope, UserRound,
-  UsersRound, UserPlus, KeyRound, Pencil, X, XCircle,
+  UsersRound, UserPlus, KeyRound, Pencil, Trash2, X, XCircle,
 } from "lucide-react";
 import { clearSession, getSession, request, setSession } from "./api";
 
@@ -425,10 +425,19 @@ function PcrEditor({ session }) {
   const update = (key, value) => { setReport((current) => ({ ...current, [key]: value })); setDirty(true); setSaveState("Unsaved"); };
   const save = useCallback(async (silent = false) => {
     if (!reportRef.current) return;
+    const snapshot = reportRef.current;
     setSaveState("Saving...");
-    const updated = await request(`/reports/${id}`, { method: "PUT", body: JSON.stringify(reportRef.current) });
-    setReport(updated); reportRef.current = updated; setDirty(false); setSaveState("Saved");
-    if (!silent) { setToast("Report saved"); setTimeout(() => setToast(""), 2200); }
+    const updated = await request(`/reports/${id}`, { method: "PUT", body: JSON.stringify(snapshot) });
+    const hasNewerTyping = reportRef.current !== snapshot;
+    if (silent || hasNewerTyping) {
+      reportRef.current = hasNewerTyping ? reportRef.current : { ...reportRef.current, updatedAt: updated.updatedAt };
+    } else {
+      setReport(updated);
+      reportRef.current = updated;
+    }
+    setDirty(hasNewerTyping);
+    setSaveState(hasNewerTyping ? "Unsaved" : "Saved");
+    if (!silent && !hasNewerTyping) { setToast("Report saved"); setTimeout(() => setToast(""), 2200); }
   }, [id]);
   useEffect(() => {
     if (!dirty || readOnly) return undefined;
@@ -443,6 +452,11 @@ function PcrEditor({ session }) {
   };
   const submit = () => chartAction("submit", "Posted to QA");
   const reviewAction = (action) => chartAction(action, action === "approve" ? "Approved report" : action === "return" ? "Returned to provider" : "Locked report");
+  const deleteReport = async () => {
+    if (!window.confirm(`Delete ${report?.pcrId || "this report"}? This cannot be undone.`)) return;
+    await request(`/reports/${id}`, { method: "DELETE" });
+    navigate("/reports", { replace: true });
+  };
   if (!report) return <div className="loading"><RefreshCw className="spin" />Loading patient care report…</div>;
   const tabProps = { report, update, readOnly };
   const content = {
@@ -460,6 +474,7 @@ function PcrEditor({ session }) {
       {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <button className="elite-approve" onClick={() => reviewAction("approve")}><Check size={17} />Approve</button> : null}
       {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <button className="elite-return" onClick={() => reviewAction("return")}><RefreshCw size={17} />Return</button> : null}
       {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Approved" ? <button className="elite-lock" onClick={() => reviewAction("lock")}><LockKeyhole size={17} />Lock</button> : null}
+      {session.user.role === "Admin" ? <button className="elite-delete" onClick={deleteReport}><Trash2 size={17} />Delete</button> : null}
       <button onClick={() => openAuthenticatedPdf(`/api/reports/${id}/pdf`)}><Printer size={17} />Print</button>
       <button onClick={() => openAuthenticatedPdf(`/api/reports/${id}/pdf`)}><FileText size={17} />PDF</button>
       <button><Ambulance size={17} />CAD</button><button><RefreshCw size={17} />Transfers</button><button><MessageSquareText size={17} />Messages</button>
@@ -484,7 +499,7 @@ function PcrEditor({ session }) {
       <main className="editor-body"><div className="classic-form-title">{tab}</div>{content}</main>
       <aside className="classic-tools">{["Times", "Image", "Timeline", "Validate", "Medical Abstract", "QA"].map((item) => <button key={item}><FileText size={16} />{item}</button>)}</aside>
     </div>
-    <div className="editor-actionbar classic-statusbar"><div className="validation-score"><strong>{validationScore}</strong><span>Validation</span></div><div className="save-indicator"><span className={saveState === "Saved" ? "saved-dot" : "saving-dot"} />{saveState}<small>{session.user.role === "Provider" ? "Use Post when the chart is ready for QA" : "QA actions are available in the toolbar and QA/QI tab"}</small></div><div className="status-select">Status:<strong>{report.status}</strong></div><div>{!readOnly ? <Button kind="primary" icon={Check} onClick={() => save(false)}>Save</Button> : null}{session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit</Button> : null}{["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <Button kind="success" icon={Check} onClick={() => reviewAction("approve")}>Approve</Button> : null}</div></div>
+    <div className="editor-actionbar classic-statusbar"><div className="validation-score"><strong>{validationScore}</strong><span>Validation</span></div><div className="save-indicator"><span className={saveState === "Saved" ? "saved-dot" : "saving-dot"} />{saveState}<small>{session.user.role === "Provider" ? "Use Post when the chart is ready for QA" : "QA actions are available in the toolbar and QA/QI tab"}</small></div><div className="status-select">Status:<strong>{report.status}</strong></div><div>{!readOnly ? <Button kind="primary" icon={Check} onClick={() => save(false)}>Save</Button> : null}{session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit</Button> : null}{["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <Button kind="success" icon={Check} onClick={() => reviewAction("approve")}>Approve</Button> : null}{session.user.role === "Admin" ? <Button kind="danger" icon={Trash2} onClick={deleteReport}>Delete</Button> : null}</div></div>
     {toast ? <div className="toast"><Check size={16} />{toast}</div> : null}
   </div>;
 }
