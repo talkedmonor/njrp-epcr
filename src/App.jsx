@@ -486,6 +486,7 @@ function PcrEditor({ session }) {
       <div className="editor-header-actions"><Button icon={Printer} onClick={() => openAuthenticatedPdf(`/api/reports/${id}/pdf`)}>Preview PDF</Button></div>
     </div>
     {readOnly ? <div className="readonly-banner"><LockKeyhole size={16} /><div><strong>This report is read-only</strong><span>{report.status === "Submitted" ? "It is currently awaiting QA review." : `Status: ${report.status}`}</span></div></div> : null}
+    {session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <div className="submit-callout"><div><strong>Ready to send this chart to QA?</strong><span>Use Post / Submit when documentation is complete. You can still save drafts until you post.</span></div><Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit to QA</Button></div> : null}
     <div className="classic-workspace">
       <aside className="classic-section-nav">
         <div className="classic-search-label">Elite Field</div>
