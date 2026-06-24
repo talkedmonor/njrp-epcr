@@ -5,3 +5,4 @@ tmp/
 output/
 design/*.png
 .DS_Store
+.dev.vars

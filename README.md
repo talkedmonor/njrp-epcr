@@ -64,6 +64,62 @@ The local SQLite database is created and seeded automatically on first run.
 
 ## Free hosting
 
+### Recommended no-VM path: Supabase + Cloudflare Pages
+
+This repository is ready for Cloudflare Pages + Supabase:
+
+- `dist/` is built by Vite and hosted by Cloudflare Pages.
+- `functions/api/[[path]].js` provides the `/api/*` backend as Cloudflare Pages Functions.
+- `supabase/schema.sql` creates and seeds the Postgres database.
+- The old local Express/SQLite server remains for local fallback and quick testing.
+
+#### 1. Create the Supabase database
+
+1. Go to <https://supabase.com/dashboard>.
+2. Create a new free project named `njrp-epcr`.
+3. Open **SQL Editor**.
+4. Paste and run the contents of `supabase/schema.sql`.
+5. Go to **Project Settings → API** and copy:
+   - Project URL
+   - `service_role` key
+
+The seeded accounts are:
+
+| Role | Roblox username | Password |
+| --- | --- | --- |
+| Public Provider | `ProviderDemo` | `provider123` |
+| Master Admin | `NJRPMaster` | `master2026!` |
+
+#### 2. Deploy to Cloudflare Pages
+
+1. Go to <https://dash.cloudflare.com>.
+2. Open **Workers & Pages → Create application → Pages → Connect to Git**.
+3. Select `talkedmonor/njrp-epcr`.
+4. Use:
+
+```text
+Framework preset: Vite
+Build command: npm run build
+Build output directory: dist
+Root directory: /
+```
+
+5. Add these environment variables in **Settings → Environment variables**:
+
+```text
+SUPABASE_URL=your Supabase project URL
+SUPABASE_SERVICE_ROLE_KEY=your Supabase service_role key
+SESSION_SECRET=a long random secret string
+```
+
+6. Deploy.
+
+Cloudflare Pages will serve the frontend and route `/api/*` to the Pages Function.
+
+#### 3. PDF/print behavior on Cloudflare
+
+The local Express server uses PDFKit for true PDF files. The Cloudflare version returns a print-optimized HTML record from the same `/pdf` endpoints because Cloudflare Pages Functions run on the Workers runtime, not a normal Node server. Use the browser's **Print → Save as PDF** flow for deployment.
+
 ### Fastest public demo: Render
 
 1. Push this folder to a GitHub repository.
