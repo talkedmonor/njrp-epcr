@@ -279,7 +279,7 @@ async function handler(request, env) {
       const body = await request.json();
       const action = body.action;
       const allowed = {
-        submit: user.role === "Provider" && report.ownerId === user.id && ["Draft", "Returned"].includes(report.status),
+        submit: (user.role === "Admin" || (user.role === "Provider" && report.ownerId === user.id)) && ["Draft", "Returned"].includes(report.status),
         return: ["Supervisor", "Admin"].includes(user.role) && report.status === "Submitted",
         approve: ["Supervisor", "Admin"].includes(user.role) && report.status === "Submitted",
         lock: ["Supervisor", "Admin"].includes(user.role) && report.status === "Approved",

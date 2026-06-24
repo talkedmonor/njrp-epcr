@@ -458,6 +458,7 @@ function PcrEditor({ session }) {
     navigate("/reports", { replace: true });
   };
   if (!report) return <div className="loading"><RefreshCw className="spin" />Loading patient care report…</div>;
+  const canSubmitReport = ["Provider", "Admin"].includes(session.user.role) && ["Draft", "Returned"].includes(report.status);
   const tabProps = { report, update, readOnly };
   const content = {
     Incident: <IncidentTab {...tabProps} />, Patient: <PatientTab {...tabProps} />, Times: <TimesTab {...tabProps} />,
@@ -470,7 +471,7 @@ function PcrEditor({ session }) {
     <div className="elite-commandbar">
       <label><Search size={17} /><input placeholder="Find field..." /></label>
       {!readOnly ? <button className="elite-save" onClick={() => save(false)}><Check size={17} />Save</button> : null}
-      {session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <button className="elite-post" onClick={submit}><ClipboardCheck size={17} />Post</button> : null}
+      {canSubmitReport ? <button className="elite-post" onClick={submit}><ClipboardCheck size={17} />Post</button> : null}
       {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <button className="elite-approve" onClick={() => reviewAction("approve")}><Check size={17} />Approve</button> : null}
       {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <button className="elite-return" onClick={() => reviewAction("return")}><RefreshCw size={17} />Return</button> : null}
       {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Approved" ? <button className="elite-lock" onClick={() => reviewAction("lock")}><LockKeyhole size={17} />Lock</button> : null}
@@ -486,7 +487,7 @@ function PcrEditor({ session }) {
       <div className="editor-header-actions"><Button icon={Printer} onClick={() => openAuthenticatedPdf(`/api/reports/${id}/pdf`)}>Preview PDF</Button></div>
     </div>
     {readOnly ? <div className="readonly-banner"><LockKeyhole size={16} /><div><strong>This report is read-only</strong><span>{report.status === "Submitted" ? "It is currently awaiting QA review." : `Status: ${report.status}`}</span></div></div> : null}
-    {session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <div className="submit-callout"><div><strong>Ready to send this chart to QA?</strong><span>Use Post / Submit when documentation is complete. You can still save drafts until you post.</span></div><Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit to QA</Button></div> : null}
+    {canSubmitReport ? <div className="submit-callout"><div><strong>Ready to send this chart to QA?</strong><span>Use Post / Submit when documentation is complete. You can still save drafts until you post.</span></div><Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit to QA</Button></div> : null}
     <div className="classic-workspace">
       <aside className="classic-section-nav">
         <div className="classic-search-label">Elite Field</div>
@@ -500,7 +501,7 @@ function PcrEditor({ session }) {
       <main className="editor-body"><div className="classic-form-title">{tab}</div>{content}</main>
       <aside className="classic-tools">{["Times", "Image", "Timeline", "Validate", "Medical Abstract", "QA"].map((item) => <button key={item}><FileText size={16} />{item}</button>)}</aside>
     </div>
-    <div className="editor-actionbar classic-statusbar"><div className="validation-score"><strong>{validationScore}</strong><span>Validation</span></div><div className="save-indicator"><span className={saveState === "Saved" ? "saved-dot" : "saving-dot"} />{saveState}<small>{session.user.role === "Provider" ? "Use Post when the chart is ready for QA" : "QA actions are available in the toolbar and QA/QI tab"}</small></div><div className="status-select">Status:<strong>{report.status}</strong></div><div>{!readOnly ? <Button kind="primary" icon={Check} onClick={() => save(false)}>Save</Button> : null}{session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit</Button> : null}{["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <Button kind="success" icon={Check} onClick={() => reviewAction("approve")}>Approve</Button> : null}{session.user.role === "Admin" ? <Button kind="danger" icon={Trash2} onClick={deleteReport}>Delete</Button> : null}</div></div>
+    <div className="editor-actionbar classic-statusbar"><div className="validation-score"><strong>{validationScore}</strong><span>Validation</span></div><div className="save-indicator"><span className={saveState === "Saved" ? "saved-dot" : "saving-dot"} />{saveState}<small>{canSubmitReport ? "Use Post when the chart is ready for QA" : "QA actions are available in the toolbar and QA/QI tab"}</small></div><div className="status-select">Status:<strong>{report.status}</strong></div><div>{!readOnly ? <Button kind="primary" icon={Check} onClick={() => save(false)}>Save</Button> : null}{canSubmitReport ? <Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit</Button> : null}{["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <Button kind="success" icon={Check} onClick={() => reviewAction("approve")}>Approve</Button> : null}{session.user.role === "Admin" ? <Button kind="danger" icon={Trash2} onClick={deleteReport}>Delete</Button> : null}</div></div>
     {toast ? <div className="toast"><Check size={16} />{toast}</div> : null}
   </div>;
 }

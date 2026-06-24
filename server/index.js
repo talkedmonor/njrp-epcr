@@ -385,7 +385,7 @@ app.post("/api/reports/:id/action", auth, (req, res) => {
   if (!report) return res.status(404).json({ error: "Report not found" });
   const action = req.body.action;
   const allowed = {
-    submit: req.user.role === "Provider" && report.ownerId === req.user.id && ["Draft", "Returned"].includes(report.status),
+    submit: (req.user.role === "Admin" || (req.user.role === "Provider" && report.ownerId === req.user.id)) && ["Draft", "Returned"].includes(report.status),
     return: ["Supervisor", "Admin"].includes(req.user.role) && report.status === "Submitted",
     approve: ["Supervisor", "Admin"].includes(req.user.role) && report.status === "Submitted",
     lock: ["Supervisor", "Admin"].includes(req.user.role) && report.status === "Approved",
