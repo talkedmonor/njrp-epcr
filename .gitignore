@@ -1,0 +1,7 @@
+node_modules/
+dist/
+server/*.db
+tmp/
+output/
+design/*.png
+.DS_Store
