@@ -61,8 +61,6 @@ function Login({ onLogin }) {
   const choose = (role) => {
     const credentials = {
       Provider: ["ProviderDemo", "provider123"],
-      Supervisor: ["SupervisorDemo", "supervisor123"],
-      Admin: ["AdminDemo", "admin123"],
     }[role];
     setUsername(credentials[0]); setPassword(credentials[1]);
   };
@@ -92,9 +90,9 @@ function Login({ onLogin }) {
           <label>Password<input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required /></label>
           <Button kind="primary wide" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Button>
           <div className="demo-block">
-            <span>Demo accounts</span>
+            <span>Public provider access</span>
             <div className="demo-buttons">
-              {["Provider", "Supervisor", "Admin"].map((role) => <button type="button" key={role} onClick={() => choose(role)}>{role}</button>)}
+              <button type="button" onClick={() => choose("Provider")}>Use Provider Account</button>
             </div>
           </div>
         </form>
@@ -132,7 +130,7 @@ function Shell({ session, onLogout, children }) {
         </nav>
         <div className="sidebar-footer">
           <div className="shift-card"><span className="live-dot" />Shift active<strong>Medic 12 • North</strong><small>08:00–20:00</small></div>
-          <button onClick={onLogout}><LogOut size={17} />Sign out</button>
+          <button type="button" onClick={onLogout}><LogOut size={17} />Sign out</button>
         </div>
       </aside>
       <div className="app-main">
@@ -437,7 +435,14 @@ function PcrEditor({ session }) {
     const timer = setTimeout(() => save(true).catch(() => setSaveState("Save failed")), 1200);
     return () => clearTimeout(timer);
   }, [dirty, readOnly, save]);
-  const submit = async () => { if (dirty) await save(); const updated = await request(`/reports/${id}/action`, { method: "POST", body: JSON.stringify({ action: "submit" }) }); setReport(updated); setToast("Submitted for QA"); };
+  const chartAction = async (action, message) => {
+    if (dirty && action === "submit") await save();
+    const updated = await request(`/reports/${id}/action`, { method: "POST", body: JSON.stringify({ action }) });
+    setReport(updated); reportRef.current = updated; setDirty(false); setSaveState("Saved");
+    setToast(message); setTimeout(() => setToast(""), 2400);
+  };
+  const submit = () => chartAction("submit", "Posted to QA");
+  const reviewAction = (action) => chartAction(action, action === "approve" ? "Approved report" : action === "return" ? "Returned to provider" : "Locked report");
   if (!report) return <div className="loading"><RefreshCw className="spin" />Loading patient care report…</div>;
   const tabProps = { report, update, readOnly };
   const content = {
@@ -451,6 +456,10 @@ function PcrEditor({ session }) {
     <div className="elite-commandbar">
       <label><Search size={17} /><input placeholder="Find field..." /></label>
       {!readOnly ? <button className="elite-save" onClick={() => save(false)}><Check size={17} />Save</button> : null}
+      {session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <button className="elite-post" onClick={submit}><ClipboardCheck size={17} />Post</button> : null}
+      {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <button className="elite-approve" onClick={() => reviewAction("approve")}><Check size={17} />Approve</button> : null}
+      {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <button className="elite-return" onClick={() => reviewAction("return")}><RefreshCw size={17} />Return</button> : null}
+      {["Supervisor", "Admin"].includes(session.user.role) && report.status === "Approved" ? <button className="elite-lock" onClick={() => reviewAction("lock")}><LockKeyhole size={17} />Lock</button> : null}
       <button onClick={() => openAuthenticatedPdf(`/api/reports/${id}/pdf`)}><Printer size={17} />Print</button>
       <button onClick={() => openAuthenticatedPdf(`/api/reports/${id}/pdf`)}><FileText size={17} />PDF</button>
       <button><Ambulance size={17} />CAD</button><button><RefreshCw size={17} />Transfers</button><button><MessageSquareText size={17} />Messages</button>
@@ -475,7 +484,7 @@ function PcrEditor({ session }) {
       <main className="editor-body"><div className="classic-form-title">{tab}</div>{content}</main>
       <aside className="classic-tools">{["Times", "Image", "Timeline", "Validate", "Medical Abstract", "QA"].map((item) => <button key={item}><FileText size={16} />{item}</button>)}</aside>
     </div>
-    <div className="editor-actionbar classic-statusbar"><div className="validation-score"><strong>{validationScore}</strong><span>Validation</span></div><div className="save-indicator"><span className={saveState === "Saved" ? "saved-dot" : "saving-dot"} />{saveState}<small>Last updated {formatTime(report.updatedAt)}</small></div><div className="status-select">Status:<strong>{report.status}</strong></div><div>{!readOnly ? <Button kind="primary" icon={Check} onClick={() => save(false)}>Save</Button> : null}{session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit</Button> : null}</div></div>
+    <div className="editor-actionbar classic-statusbar"><div className="validation-score"><strong>{validationScore}</strong><span>Validation</span></div><div className="save-indicator"><span className={saveState === "Saved" ? "saved-dot" : "saving-dot"} />{saveState}<small>{session.user.role === "Provider" ? "Use Post when the chart is ready for QA" : "QA actions are available in the toolbar and QA/QI tab"}</small></div><div className="status-select">Status:<strong>{report.status}</strong></div><div>{!readOnly ? <Button kind="primary" icon={Check} onClick={() => save(false)}>Save</Button> : null}{session.user.role === "Provider" && ["Draft", "Returned"].includes(report.status) ? <Button kind="success" icon={ClipboardCheck} onClick={submit}>Post / Submit</Button> : null}{["Supervisor", "Admin"].includes(session.user.role) && report.status === "Submitted" ? <Button kind="success" icon={Check} onClick={() => reviewAction("approve")}>Approve</Button> : null}</div></div>
     {toast ? <div className="toast"><Check size={16} />{toast}</div> : null}
   </div>;
 }
@@ -568,7 +577,7 @@ function UsersPage() {
 
 function App() {
   const [session, setCurrentSession] = useState(getSession());
-  const logout = () => { clearSession(); setCurrentSession(null); };
+  const logout = () => { clearSession(); setCurrentSession(null); window.location.assign("/"); };
   if (!session) return <Login onLogin={setCurrentSession} />;
   return <Shell session={session} onLogout={logout}><Routes>
     <Route path="/" element={<Dashboard session={session} />} />

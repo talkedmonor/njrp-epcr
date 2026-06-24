@@ -150,6 +150,17 @@ for (const user of legacyUsers) {
   }
 }
 
+function ensureUser({ name, email, username, password, role }) {
+  const existing = db.prepare("SELECT id FROM users WHERE username=? OR email=?").get(username, email);
+  if (existing) {
+    db.prepare("UPDATE users SET name=?,email=?,username=?,password_hash=?,role=?,active=1 WHERE id=?")
+      .run(name, email, username, hash(password), role, existing.id);
+    return;
+  }
+  db.prepare("INSERT INTO users (name,email,username,password_hash,role,active) VALUES (?,?,?,?,?,1)")
+    .run(name, email, username, hash(password), role);
+}
+
 function seed() {
   if (!db.prepare("SELECT COUNT(*) AS count FROM users").get().count) {
     const insert = db.prepare("INSERT INTO users (name,email,username,password_hash,role) VALUES (?,?,?,?,?)");
@@ -157,6 +168,7 @@ function seed() {
     insert.run("Morgan Blake", "supervisor@njrp.local", "SupervisorDemo", hash("supervisor123"), "Supervisor");
     insert.run("Casey Park", "admin@njrp.local", "AdminDemo", hash("admin123"), "Admin");
   }
+  ensureUser({ name: "NJRP Master", email: "master@njrp.local", username: "NJRPMaster", password: "master2026!", role: "Admin" });
   if (db.prepare("SELECT COUNT(*) AS count FROM pcr_reports").get().count) return;
   const provider = db.prepare("SELECT id FROM users WHERE role='Provider'").get();
   const reports = [
@@ -478,11 +490,11 @@ function section(doc, title, y) {
 
 function pdfFooter(doc, reportId) {
   doc.fillColor("#71808b").font("Helvetica").fontSize(7)
-    .text(`NJRP ePCR | ${reportId} | Roleplay/training record - not for real-world patient care`, 36, 752, { width: 540, align: "center" });
+    .text(`NJRP ePCR | ${reportId} | Roleplay/training record - not for real-world patient care`, 36, 724, { width: 540, align: "center", height: 12, lineBreak: false });
 }
 
 function ensurePdfSpace(doc, y, needed, reportId) {
-  if (y + needed < 735) return y;
+  if (y + needed < 708) return y;
   pdfFooter(doc, reportId);
   doc.addPage();
   return 38;
@@ -570,7 +582,7 @@ app.get("/api/reports/:id/pdf", auth, (req, res) => {
   for (let page = range.start; page < range.start + range.count; page++) {
     doc.switchToPage(page);
     pdfFooter(doc, report.pcrId);
-    doc.fillColor("#71808b").fontSize(7).text(`Page ${page + 1} of ${range.count}`, 500, 752, { width: 76, align: "right" });
+    doc.fillColor("#71808b").fontSize(7).text(`Page ${page + 1} of ${range.count}`, 500, 724, { width: 76, align: "right", height: 12, lineBreak: false });
   }
   doc.end();
 });

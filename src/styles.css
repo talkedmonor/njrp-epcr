@@ -160,7 +160,7 @@ a { color: inherit; }
 .login-form input:focus, .field input:focus, .field select:focus, .field textarea:focus { border-color: #448bc0; box-shadow: 0 0 0 3px rgba(31,111,170,.09); }
 .demo-block { border-top: 1px solid var(--border); padding-top: 16px; }
 .demo-block > span { display: block; text-align: center; color: #8494a1; font-size: 9px; margin-bottom: 10px; }
-.demo-buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.demo-buttons { display: grid; grid-template-columns: 1fr; gap: 6px; }
 .demo-buttons button { border: 1px solid var(--border); border-radius: 5px; height: 32px; background: #f8fafc; color: #405a6e; font-size: 9px; font-weight: 600; }
 .alert { padding: 10px 12px; border-radius: 5px; font-size: 10px; }
 .alert.error { background: var(--red-soft); color: var(--red); border: 1px solid #f1caca; }
@@ -492,6 +492,10 @@ body { background: var(--canvas); font-family: Arial, Helvetica, sans-serif; fon
 .elite-commandbar input { min-width: 0; width: 100%; border: 0; outline: 0; font-size: 14px; background: transparent; }
 .elite-commandbar > button { min-width: 58px; border: 0; border-radius: 2px; background: linear-gradient(#4e9aca,#1d6f9d); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: 8px; font-weight: 700; text-shadow: 0 1px rgba(0,0,0,.25); box-shadow: inset 0 1px rgba(255,255,255,.25); }
 .elite-commandbar > button.elite-save { background: linear-gradient(#48ae34,#26831f); min-width: 78px; font-size: 11px; flex-direction: row; gap: 5px; }
+.elite-commandbar > button.elite-post,
+.elite-commandbar > button.elite-approve { background: linear-gradient(#52b73c,#247d20); min-width: 72px; }
+.elite-commandbar > button.elite-return { background: linear-gradient(#f2a12a,#bc6c00); min-width: 70px; }
+.elite-commandbar > button.elite-lock { background: linear-gradient(#555,#252525); min-width: 64px; }
 .elite-commandbar > button.elite-close { background: linear-gradient(#ed1919,#b50000); }
 .classic-editor .editor-header { display: none; }
 .classic-workspace { display: grid; grid-template-columns: 292px minmax(0, 1fr) 64px; height: calc(100vh - 108px); min-height: 560px; background: #cfd1d3; border-top: 1px solid #525252; }
