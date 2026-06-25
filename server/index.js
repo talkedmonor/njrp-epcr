@@ -19,6 +19,7 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 const hash = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const now = () => new Date().toISOString();
+const defaultAgencies = ["Atlantic Mobile Health System", "Trenton Emergency Medical Services", "Virtua Health", "Princeton First Aid and Rescue Squad"];
 const parse = (value, fallback = {}) => {
   try {
     return JSON.parse(value);
@@ -137,10 +138,40 @@ db.exec(`
     generated_by INTEGER NOT NULL,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS agency_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS cad_units (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    unit_number TEXT NOT NULL UNIQUE,
+    label TEXT,
+    agency TEXT,
+    status TEXT NOT NULL DEFAULT 'Available',
+    crew_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS cad_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cad_number TEXT NOT NULL UNIQUE,
+    incident_type TEXT,
+    location TEXT,
+    scene_type TEXT,
+    priority TEXT,
+    dispatch_notes TEXT,
+    units_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'Active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 const userColumns = db.prepare("PRAGMA table_info(users)").all().map((column) => column.name);
 if (!userColumns.includes("username")) db.exec("ALTER TABLE users ADD COLUMN username TEXT");
+if (!userColumns.includes("provider_level")) db.exec("ALTER TABLE users ADD COLUMN provider_level TEXT DEFAULT 'EMT'");
+if (!userColumns.includes("agencies_json")) db.exec("ALTER TABLE users ADD COLUMN agencies_json TEXT DEFAULT '[]'");
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users(username)");
 const legacyUsers = db.prepare("SELECT id,name,email,username FROM users").all();
 for (const user of legacyUsers) {
@@ -150,24 +181,30 @@ for (const user of legacyUsers) {
   }
 }
 
+function seedAgencies() {
+  const insert = db.prepare("INSERT OR IGNORE INTO agency_settings (name,active,created_at) VALUES (?,1,?)");
+  for (const agency of defaultAgencies) insert.run(agency, now());
+}
+
 function ensureUser({ name, email, username, password, role }) {
   const existing = db.prepare("SELECT id FROM users WHERE email=?").get(email) || db.prepare("SELECT id FROM users WHERE username=?").get(username);
   if (existing) {
     db.prepare("UPDATE users SET username=username || '_old_' || id WHERE username=? AND id<>?").run(username, existing.id);
-    db.prepare("UPDATE users SET name=?,email=?,username=?,password_hash=?,role=?,active=1 WHERE id=?")
+    db.prepare("UPDATE users SET name=?,email=?,username=?,password_hash=?,role=?,provider_level=COALESCE(provider_level,'EMT'),active=1 WHERE id=?")
       .run(name, email, username, hash(password), role, existing.id);
     return;
   }
-  db.prepare("INSERT INTO users (name,email,username,password_hash,role,active) VALUES (?,?,?,?,?,1)")
-    .run(name, email, username, hash(password), role);
+  db.prepare("INSERT INTO users (name,email,username,password_hash,role,provider_level,agencies_json,active) VALUES (?,?,?,?,?,?,?,1)")
+    .run(name, email, username, hash(password), role, role === "Provider" ? "EMT" : role, JSON.stringify(defaultAgencies.slice(0, 1)));
 }
 
 function seed() {
+  seedAgencies();
   if (!db.prepare("SELECT COUNT(*) AS count FROM users").get().count) {
-    const insert = db.prepare("INSERT INTO users (name,email,username,password_hash,role) VALUES (?,?,?,?,?)");
-    insert.run("Jordan Reyes", "provider@njrp.local", "ProviderDemo", hash("provider123"), "Provider");
-    insert.run("Morgan Blake", "supervisor@njrp.local", "SupervisorDemo", hash("supervisor123"), "Supervisor");
-    insert.run("Casey Park", "admin@njrp.local", "AdminDemo", hash("admin123"), "Admin");
+    const insert = db.prepare("INSERT INTO users (name,email,username,password_hash,role,provider_level,agencies_json) VALUES (?,?,?,?,?,?,?)");
+    insert.run("Jordan Reyes", "provider@njrp.local", "ProviderDemo", hash("provider123"), "Provider", "Paramedic", JSON.stringify(defaultAgencies.slice(0, 1)));
+    insert.run("Morgan Blake", "supervisor@njrp.local", "SupervisorDemo", hash("supervisor123"), "Supervisor", "Supervisor", JSON.stringify(defaultAgencies.slice(0, 2)));
+    insert.run("Casey Park", "admin@njrp.local", "AdminDemo", hash("admin123"), "Admin", "Supervisor", JSON.stringify(defaultAgencies));
   }
   ensureUser({ name: "NJRP Master", email: "master@njrp.local", username: "Yoroblox372", password: "master2026!", role: "Admin" });
   if (db.prepare("SELECT COUNT(*) AS count FROM pcr_reports").get().count) return;
@@ -252,7 +289,8 @@ seed();
 function userFromRequest(req) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   const userId = sessions.get(token);
-  return userId ? db.prepare("SELECT id,name,username,role,active FROM users WHERE id=?").get(userId) : null;
+  const user = userId ? db.prepare("SELECT id,name,username,role,active,provider_level AS providerLevel,agencies_json AS agenciesJson FROM users WHERE id=?").get(userId) : null;
+  return user ? { ...user, agencies: parse(user.agenciesJson, []), agenciesJson: undefined } : null;
 }
 
 function auth(req, res, next) {
@@ -285,12 +323,12 @@ function reportDetail(id) {
 
 app.post("/api/login", (req, res) => {
   const username = String(req.body.username || "").trim();
-  const user = db.prepare("SELECT id,name,username,role,active,password_hash FROM users WHERE username=? COLLATE NOCASE").get(username);
+  const user = db.prepare("SELECT id,name,username,role,active,password_hash,provider_level AS providerLevel,agencies_json AS agenciesJson FROM users WHERE username=? COLLATE NOCASE").get(username);
   if (!user || user.password_hash !== hash(req.body.password) || !user.active) return res.status(401).json({ error: "Invalid Roblox username or password" });
   const token = crypto.randomBytes(24).toString("hex");
   sessions.set(token, user.id);
   audit(user.id, null, "Signed in", "Authenticated to NJRP ePCR");
-  res.json({ token, user: { id: user.id, name: user.name, username: user.username, role: user.role } });
+  res.json({ token, user: { id: user.id, name: user.name, username: user.username, role: user.role, providerLevel: user.providerLevel, agencies: parse(user.agenciesJson, []) } });
 });
 
 app.get("/api/me", auth, (req, res) => res.json(req.user));
@@ -328,9 +366,16 @@ app.get("/api/reports/:id", auth, (req, res) => {
 app.post("/api/reports", auth, (req, res) => {
   const seq = db.prepare("SELECT COALESCE(MAX(id),0)+1 AS next FROM pcr_reports").get().next;
   const pcrId = `PCR-2026-${String(10020 + seq).padStart(5, "0")}`;
-  const incident = { pcrId, cadNumber: "", unit: "", crew: req.user.name, primaryProvider: req.user.name, agencies: "", incidentType: "", priority: "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft" };
+  const input = req.body?.incident || {};
+  const incident = {
+    pcrId, cadNumber: input.cadNumber || "", location: input.location || "", dispatch: input.dispatch || "", unit: input.unit || "",
+    crew: req.user.name, crewMembers: input.crewMembers || [], primaryProvider: req.user.name, agencies: input.agencies || (req.user.agencies || []).join(", "),
+    incidentType: input.incidentType || "", sceneType: input.sceneType || "", callDisposition: input.callDisposition || "", patientAcuity: input.patientAcuity || "",
+    destinationType: input.destinationType || "", receivingFacility: input.receivingFacility || "NJRP Medical Center", transportMode: input.transportMode || "",
+    priority: input.priority || "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft",
+  };
   const result = db.prepare(`INSERT INTO pcr_reports (pcr_id,cad_number,owner_id,status,incident_type,unit,priority,incident_date,data,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
-    .run(pcrId, "", req.user.id, "Draft", "", "", "2-Urgent", incident.incidentDate, JSON.stringify(incident), now());
+    .run(pcrId, incident.cadNumber || "", req.user.id, "Draft", incident.incidentType || "", incident.unit || "", incident.priority || "2-Urgent", incident.incidentDate, JSON.stringify(incident), now());
   const id = Number(result.lastInsertRowid);
   for (const table of ["patients", "report_times", "assessments", "narratives"]) db.prepare(`INSERT INTO ${table} (report_id,data) VALUES (?,?)`).run(id, "{}");
   audit(req.user.id, id, "Created PCR", `${pcrId} created as draft`);
@@ -429,6 +474,58 @@ app.put("/api/refusals/:id", auth, (req, res) => {
   res.json({ id: row.id, refusalId: row.refusal_id, status: row.status, ...req.body });
 });
 
+app.get("/api/settings/agencies", auth, (_req, res) => {
+  res.json(db.prepare("SELECT id,name,active,created_at AS createdAt FROM agency_settings ORDER BY name").all());
+});
+
+app.post("/api/settings/agencies", auth, (req, res) => {
+  if (req.user.role !== "Admin") return res.status(403).json({ error: "Admin access required" });
+  const name = String(req.body.name || "").trim();
+  if (!name) return res.status(400).json({ error: "Agency name is required" });
+  try {
+    const result = db.prepare("INSERT INTO agency_settings (name,active,created_at) VALUES (?,1,?)").run(name, now());
+    audit(req.user.id, null, "Created agency", name);
+    res.status(201).json({ id: Number(result.lastInsertRowid), name, active: 1, createdAt: now() });
+  } catch (error) {
+    if (String(error.message).includes("UNIQUE")) return res.status(409).json({ error: "That agency already exists" });
+    throw error;
+  }
+});
+
+app.get("/api/cad/units", auth, (req, res) => {
+  if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
+  const rows = db.prepare("SELECT id,unit_number AS unitNumber,label,agency,status,crew_json AS crewJson,updated_at AS updatedAt FROM cad_units ORDER BY unit_number").all();
+  res.json(rows.map((row) => ({ ...row, crew: parse(row.crewJson, []), crewJson: undefined })));
+});
+
+app.post("/api/cad/units", auth, (req, res) => {
+  if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
+  const unitNumber = String(req.body.unitNumber || "").trim();
+  if (!unitNumber) return res.status(400).json({ error: "Unit number is required" });
+  db.prepare(`INSERT INTO cad_units (unit_number,label,agency,status,crew_json,updated_at) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(unit_number) DO UPDATE SET label=excluded.label,agency=excluded.agency,status=excluded.status,crew_json=excluded.crew_json,updated_at=excluded.updated_at`)
+    .run(unitNumber, req.body.label || "Ambulance", req.body.agency || "", req.body.status || "Available", JSON.stringify(req.body.crew || []), now());
+  audit(req.user.id, null, "Updated CAD unit", unitNumber);
+  const row = db.prepare("SELECT id,unit_number AS unitNumber,label,agency,status,crew_json AS crewJson,updated_at AS updatedAt FROM cad_units WHERE unit_number=?").get(unitNumber);
+  res.status(201).json({ ...row, crew: parse(row.crewJson, []), crewJson: undefined });
+});
+
+app.get("/api/cad/calls", auth, (req, res) => {
+  if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
+  const rows = db.prepare("SELECT id,cad_number AS cadNumber,incident_type AS incidentType,location,scene_type AS sceneType,priority,dispatch_notes AS dispatchNotes,units_json AS unitsJson,status,created_at AS createdAt,updated_at AS updatedAt FROM cad_calls ORDER BY updated_at DESC LIMIT 100").all();
+  res.json(rows.map((row) => ({ ...row, units: parse(row.unitsJson, []), unitsJson: undefined })));
+});
+
+app.post("/api/cad/calls", auth, (req, res) => {
+  if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
+  const seq = db.prepare("SELECT COALESCE(MAX(id),0)+1 AS next FROM cad_calls").get().next;
+  const cadNumber = req.body.cadNumber || `26-${String(seq).padStart(6, "0")}`;
+  const result = db.prepare(`INSERT INTO cad_calls (cad_number,incident_type,location,scene_type,priority,dispatch_notes,units_json,status,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(cadNumber, req.body.incidentType || "", req.body.location || "", req.body.sceneType || "", req.body.priority || "2-Urgent", req.body.dispatchNotes || "", JSON.stringify(req.body.units || []), req.body.status || "Active", now(), now());
+  audit(req.user.id, null, "Created CAD call", cadNumber);
+  res.status(201).json({ id: Number(result.lastInsertRowid), cadNumber, incidentType: req.body.incidentType || "", location: req.body.location || "", sceneType: req.body.sceneType || "", priority: req.body.priority || "2-Urgent", dispatchNotes: req.body.dispatchNotes || "", units: req.body.units || [], status: req.body.status || "Active", createdAt: now(), updatedAt: now() });
+});
+
 app.get("/api/audit", auth, (req, res) => {
   if (req.user.role === "Provider") return res.status(403).json({ error: "Supervisor access required" });
   res.json(db.prepare(`SELECT a.*,u.name AS user_name,r.pcr_id FROM audit_logs a JOIN users u ON u.id=a.user_id LEFT JOIN pcr_reports r ON r.id=a.report_id ORDER BY a.created_at DESC LIMIT 100`).all());
@@ -436,7 +533,8 @@ app.get("/api/audit", auth, (req, res) => {
 
 app.get("/api/users", auth, (req, res) => {
   if (req.user.role !== "Admin") return res.status(403).json({ error: "Admin access required" });
-  res.json(db.prepare("SELECT id,name,username,role,active FROM users ORDER BY role,name").all());
+  const rows = db.prepare("SELECT id,name,username,role,active,provider_level AS providerLevel,agencies_json AS agenciesJson FROM users ORDER BY role,name").all();
+  res.json(rows.map((row) => ({ ...row, agencies: parse(row.agenciesJson, []), agenciesJson: undefined })));
 });
 
 app.post("/api/users", auth, (req, res) => {
@@ -445,15 +543,17 @@ app.post("/api/users", auth, (req, res) => {
   const username = String(req.body.username || "").trim();
   const password = String(req.body.password || "");
   const role = String(req.body.role || "");
+  const providerLevel = String(req.body.providerLevel || (role === "Provider" ? "EMT" : role));
+  const agencies = Array.isArray(req.body.agencies) ? req.body.agencies : [];
   if (!name || !username || !password) return res.status(400).json({ error: "Display name, Roblox username, and temporary password are required" });
   if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: "Roblox username must be 3-20 letters, numbers, or underscores" });
   if (password.length < 8) return res.status(400).json({ error: "Temporary password must be at least 8 characters" });
   if (!["Provider", "Supervisor", "Admin"].includes(role)) return res.status(400).json({ error: "Select a valid role" });
   try {
-    const result = db.prepare("INSERT INTO users (name,email,username,password_hash,role,active) VALUES (?,?,?,?,?,1)")
-      .run(name, `${username.toLowerCase()}@local.invalid`, username, hash(password), role);
+    const result = db.prepare("INSERT INTO users (name,email,username,password_hash,role,provider_level,agencies_json,active) VALUES (?,?,?,?,?,?,?,1)")
+      .run(name, `${username.toLowerCase()}@local.invalid`, username, hash(password), role, providerLevel, JSON.stringify(agencies));
     audit(req.user.id, null, "Created user", `${username} (${role})`);
-    res.status(201).json({ id: Number(result.lastInsertRowid), name, username, role, active: 1, temporaryPassword: password });
+    res.status(201).json({ id: Number(result.lastInsertRowid), name, username, role, providerLevel, agencies, active: 1, temporaryPassword: password });
   } catch (error) {
     if (String(error.message).includes("UNIQUE")) return res.status(409).json({ error: "That Roblox username is already in use" });
     throw error;
@@ -463,21 +563,23 @@ app.post("/api/users", auth, (req, res) => {
 app.put("/api/users/:id", auth, (req, res) => {
   if (req.user.role !== "Admin") return res.status(403).json({ error: "Admin access required" });
   const id = Number(req.params.id);
-  const existing = db.prepare("SELECT id,name,username,role,active FROM users WHERE id=?").get(id);
+  const existing = db.prepare("SELECT id,name,username,role,active,provider_level AS providerLevel,agencies_json AS agenciesJson FROM users WHERE id=?").get(id);
   if (!existing) return res.status(404).json({ error: "User not found" });
   const name = String(req.body.name ?? existing.name).trim();
   const username = String(req.body.username ?? existing.username).trim();
   const role = String(req.body.role ?? existing.role);
+  const providerLevel = String(req.body.providerLevel ?? existing.providerLevel ?? "EMT");
+  const agencies = Array.isArray(req.body.agencies) ? req.body.agencies : parse(existing.agenciesJson, []);
   const active = req.body.active === undefined ? existing.active : (req.body.active ? 1 : 0);
   const password = String(req.body.password || "");
   if (!name || !/^[A-Za-z0-9_]{3,20}$/.test(username) || !["Provider", "Supervisor", "Admin"].includes(role)) return res.status(400).json({ error: "Valid display name, Roblox username, and role are required" });
   if (id === req.user.id && (!active || role !== "Admin")) return res.status(400).json({ error: "You cannot remove your own admin access or deactivate your own account" });
   if (password && password.length < 8) return res.status(400).json({ error: "New password must be at least 8 characters" });
   try {
-    if (password) db.prepare("UPDATE users SET name=?,username=?,email=?,role=?,active=?,password_hash=? WHERE id=?").run(name, username, `${username.toLowerCase()}@local.invalid`, role, active, hash(password), id);
-    else db.prepare("UPDATE users SET name=?,username=?,email=?,role=?,active=? WHERE id=?").run(name, username, `${username.toLowerCase()}@local.invalid`, role, active, id);
+    if (password) db.prepare("UPDATE users SET name=?,username=?,email=?,role=?,provider_level=?,agencies_json=?,active=?,password_hash=? WHERE id=?").run(name, username, `${username.toLowerCase()}@local.invalid`, role, providerLevel, JSON.stringify(agencies), active, hash(password), id);
+    else db.prepare("UPDATE users SET name=?,username=?,email=?,role=?,provider_level=?,agencies_json=?,active=? WHERE id=?").run(name, username, `${username.toLowerCase()}@local.invalid`, role, providerLevel, JSON.stringify(agencies), active, id);
     audit(req.user.id, null, password ? "Updated user and reset password" : "Updated user", `${username} (${role}) - ${active ? "Active" : "Inactive"}`);
-    res.json({ id, name, username, role, active, temporaryPassword: password || undefined });
+    res.json({ id, name, username, role, providerLevel, agencies, active, temporaryPassword: password || undefined });
   } catch (error) {
     if (String(error.message).includes("UNIQUE")) return res.status(409).json({ error: "That Roblox username is already in use" });
     throw error;
@@ -573,9 +675,15 @@ app.get("/api/reports/:id/pdf", auth, (req, res) => {
   y = section(doc, "Run identifiers & response", y);
   y = pdfKeyValues(doc, [
     ["PCR ID", report.pcrId], ["Status", report.status], ["CAD number", report.incident.cadNumber], ["Incident date", report.incident.incidentDate],
-    ["Unit", report.incident.unit], ["Priority", report.incident.priority], ["Incident type", report.incident.incidentType], ["Primary provider", report.incident.primaryProvider],
-    ["Crew", report.incident.crew], ["Agencies on call", report.incident.agencies], ["Provider agency", report.providerName], ["Last updated", report.updatedAt],
+    ["Location / ERLC postal", report.incident.location], ["Dispatch complaint", report.incident.dispatch], ["Unit", report.incident.unit], ["Priority", report.incident.priority],
+    ["Incident type", report.incident.incidentType], ["Scene type", report.incident.sceneType], ["Call disposition", report.incident.callDisposition], ["Patient acuity", report.incident.patientAcuity],
+    ["Transport mode", report.incident.transportMode], ["Destination type", report.incident.destinationType], ["Receiving facility", report.incident.receivingFacility], ["Agencies on call", report.incident.agencies],
+    ["Primary provider", report.incident.primaryProvider], ["Provider agency", report.providerName], ["Last updated", report.updatedAt], ["Report status", report.status],
   ], y);
+  y = pdfListRows(doc, report.pcrId, "Crew member roster", (report.incident.crewMembers || []).map((member) => [
+    `${member.name || "-"}  ${member.providerLevel || "-"}`,
+    `Agency: ${member.agency || "-"} | Role: ${member.role || "-"} | Unit: ${member.unit || report.incident.unit || "-"}`
+  ]), y, report.incident.crew ? `Legacy crew text: ${report.incident.crew}` : "No structured crew members documented.");
   y = ensurePdfSpace(doc, y, 120, report.pcrId);
   y = section(doc, "Patient demographics & history", y);
   y = pdfKeyValues(doc, [
@@ -623,18 +731,14 @@ app.get("/api/reports/:id/pdf", auth, (req, res) => {
   y = pdfParagraph(doc, report.pcrId, "SAMPLE history", report.assessment.sample, y, 80);
   y = pdfParagraph(doc, report.pcrId, "Physical exam", report.assessment.physicalExam, y, 100);
   y = pdfParagraph(doc, report.pcrId, "Medical abstract", report.narrative.medicalAbstract || "No medical abstract generated.", y, 120);
-  y = pdfParagraph(doc, report.pcrId, "Dispatch narrative", report.narrative.dispatch, y, 90);
-  y = pdfParagraph(doc, report.pcrId, "Arrival narrative", report.narrative.arrival, y, 90);
-  y = pdfParagraph(doc, report.pcrId, "Assessment narrative", report.narrative.assessment, y, 100);
-  y = pdfParagraph(doc, report.pcrId, "Treatment narrative", report.narrative.treatment, y, 100);
-  y = pdfParagraph(doc, report.pcrId, "Transport narrative", report.narrative.transport, y, 100);
   y = pdfParagraph(doc, report.pcrId, "Full narrative", report.narrative.full || "No narrative documented.", y, 180);
   const disposition = report.signatures?.[0] || {};
   y = ensurePdfSpace(doc, y, 135, report.pcrId);
   y = section(doc, "Disposition, transfer & signatures", y);
   y = pdfKeyValues(doc, [
-    ["Disposition", disposition.disposition], ["Destination", disposition.destination], ["Transfer of care to", disposition.transferTo], ["Provider signature", disposition.providerSignature],
-    ["Patient signature", disposition.patientSignature], ["Witness signature", disposition.witnessSignature],
+    ["Disposition", disposition.disposition || report.incident.callDisposition], ["Destination", disposition.destination], ["Destination type", disposition.destinationType || report.incident.destinationType],
+    ["Transport mode", disposition.transportMode || report.incident.transportMode], ["Receiving facility", disposition.receivingFacility || report.incident.receivingFacility], ["Patient acuity", disposition.patientAcuity || report.incident.patientAcuity],
+    ["Transfer of care to", disposition.transferTo], ["Provider signature", disposition.providerSignature], ["Patient signature", disposition.patientSignature], ["Witness signature", disposition.witnessSignature],
   ], y);
   y = ensurePdfSpace(doc, y, 100, report.pcrId);
   y = section(doc, "QA / Approval", y);

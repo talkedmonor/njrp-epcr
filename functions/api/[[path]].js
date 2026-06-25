@@ -1,4 +1,5 @@
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
+const defaultAgencies = ["Atlantic Mobile Health System", "Trenton Emergency Medical Services", "Virtua Health", "Princeton First Aid and Rescue Squad"];
 
 const ok = (body, init = {}) => new Response(JSON.stringify(body), { ...init, headers: { ...jsonHeaders, ...(init.headers || {}) } });
 const fail = (status, error) => ok({ error }, { status });
@@ -146,7 +147,8 @@ async function reportDetail(db, id) {
 async function currentUser(env, request, db) {
   const userId = await readToken(env, request);
   if (!userId) return null;
-  return db.one("users", `?select=id,name,username,role,active&id=eq.${userId}&active=eq.true`);
+  const user = await db.one("users", `?select=id,name,username,role,active,provider_level,agencies&id=eq.${userId}&active=eq.true`);
+  return user ? { ...user, providerLevel: user.provider_level || "EMT", agencies: user.agencies || [] } : null;
 }
 
 async function audit(db, userId, reportId, action, detail = "") {
@@ -162,11 +164,18 @@ async function ensureBuiltInAccounts(db) {
       if (usernameConflict && usernameConflict.id !== existing.id) {
         await db.update("users", `?id=eq.${usernameConflict.id}`, { username: `${usernameConflict.username}_old_${usernameConflict.id}` });
       }
-      await db.update("users", `?id=eq.${existing.id}`, { name: "NJRP Master", username: "Yoroblox372", email: "master@njrp.local", password_hash, role: "Admin", active: true });
+      await db.update("users", `?id=eq.${existing.id}`, { name: "NJRP Master", username: "Yoroblox372", email: "master@njrp.local", password_hash, role: "Admin", provider_level: "Supervisor", agencies: defaultAgencies, active: true });
     }
     return;
   }
-  await db.insert("users", { name: "NJRP Master", email: "master@njrp.local", username: "Yoroblox372", password_hash, role: "Admin", active: true });
+  await db.insert("users", { name: "NJRP Master", email: "master@njrp.local", username: "Yoroblox372", password_hash, role: "Admin", provider_level: "Supervisor", agencies: defaultAgencies, active: true });
+}
+
+async function ensureAgencies(db) {
+  for (const agency of defaultAgencies) {
+    const existing = await db.one("agency_settings", `?select=id&name=eq.${encodeURIComponent(agency)}`).catch(() => null);
+    if (!existing) await db.insert("agency_settings", { name: agency, active: true, created_at: now() }).catch(() => null);
+  }
 }
 
 function canEdit(user, report) {
@@ -197,13 +206,14 @@ async function handler(request, env) {
 
   if (path === "login" && request.method === "POST") {
     await ensureBuiltInAccounts(db);
+    await ensureAgencies(db);
     const body = await request.json();
     const username = String(body.username || "").trim();
     const user = await db.one("users", `?select=*&username=ilike.${encodeURIComponent(username)}`);
     if (!user || !user.active || user.password_hash !== await sha256(body.password)) return fail(401, "Invalid Roblox username or password");
     const token = await createToken(env, user);
     await audit(db, user.id, null, "Signed in", "Authenticated to NJRP ePCR");
-    return ok({ token, user: { id: user.id, name: user.name, username: user.username, role: user.role } });
+    return ok({ token, user: { id: user.id, name: user.name, username: user.username, role: user.role, providerLevel: user.provider_level || "EMT", agencies: user.agencies || [] } });
   }
 
   const user = await currentUser(env, request, db);
@@ -235,12 +245,20 @@ async function handler(request, env) {
   }
 
   if (parts[0] === "reports" && parts.length === 1 && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    const input = body.incident || {};
     const latest = await db.one("pcr_reports", "?select=id&order=id.desc&limit=1");
     const seq = Number(latest?.id || 0) + 1;
     const pcrId = `PCR-2026-${String(10020 + seq).padStart(5, "0")}`;
-    const incident = { pcrId, cadNumber: "", unit: "", crew: user.name, primaryProvider: user.name, agencies: "", incidentType: "", priority: "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft" };
+    const incident = {
+      pcrId, cadNumber: input.cadNumber || "", location: input.location || "", dispatch: input.dispatch || "", unit: input.unit || "",
+      crew: user.name, crewMembers: input.crewMembers || [], primaryProvider: user.name, agencies: input.agencies || (user.agencies || []).join(", "),
+      incidentType: input.incidentType || "", sceneType: input.sceneType || "", callDisposition: input.callDisposition || "", patientAcuity: input.patientAcuity || "",
+      destinationType: input.destinationType || "", receivingFacility: input.receivingFacility || "NJRP Medical Center", transportMode: input.transportMode || "",
+      priority: input.priority || "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft",
+    };
     const row = await db.insert("pcr_reports", {
-      pcr_id: pcrId, cad_number: "", owner_id: user.id, status: "Draft", incident_type: "", unit: "", priority: "2-Urgent",
+      pcr_id: pcrId, cad_number: incident.cadNumber || "", owner_id: user.id, status: "Draft", incident_type: incident.incidentType || "", unit: incident.unit || "", priority: incident.priority || "2-Urgent",
       incident_date: incident.incidentDate, incident, patient: {}, times: {}, assessment: {}, narrative: {}, vitals: [], medications: [], interventions: [], signatures: [], updated_at: now(),
     });
     await audit(db, user.id, row.id, "Created PCR", `${pcrId} created as draft`);
@@ -309,7 +327,8 @@ async function handler(request, env) {
       await audit(db, user.id, id, "Generated printable report", report.pcrId);
       const disposition = report.signatures?.[0] || {};
       const html = printableHtml("Patient Care Report", report.pcrId, [
-        { heading: "Run identifiers & response", rows: [["PCR ID", report.pcrId], ["Status", report.status], ["CAD number", report.incident.cadNumber], ["Incident date", report.incident.incidentDate], ["Unit", report.incident.unit], ["Priority", report.incident.priority], ["Incident type", report.incident.incidentType], ["Primary provider", report.incident.primaryProvider], ["Crew", report.incident.crew], ["Agencies on call", report.incident.agencies], ["Provider agency", report.providerName], ["Last updated", report.updatedAt]] },
+        { heading: "Run identifiers & response", rows: [["PCR ID", report.pcrId], ["Status", report.status], ["CAD number", report.incident.cadNumber], ["Incident date", report.incident.incidentDate], ["Location / ERLC postal", report.incident.location], ["Dispatch complaint", report.incident.dispatch], ["Unit", report.incident.unit], ["Priority", report.incident.priority], ["Incident type", report.incident.incidentType], ["Scene type", report.incident.sceneType], ["Call disposition", report.incident.callDisposition], ["Patient acuity", report.incident.patientAcuity], ["Transport mode", report.incident.transportMode], ["Destination type", report.incident.destinationType], ["Receiving facility", report.incident.receivingFacility], ["Agencies on call", report.incident.agencies], ["Primary provider", report.incident.primaryProvider], ["Provider agency", report.providerName], ["Last updated", report.updatedAt]] },
+        { heading: "Crew member roster", items: (report.incident.crewMembers || []).length ? report.incident.crewMembers.map((member) => [`${member.name || "-"} - ${member.providerLevel || "-"}`, `Agency: ${member.agency || "-"} | Role: ${member.role || "-"} | Unit: ${member.unit || report.incident.unit || "-"}`]) : [["Crew", report.incident.crew || "No structured crew members documented."]] },
         { heading: "Patient demographics & history", rows: [["Patient name", report.patient.patientName], ["DOB / age", `${report.patient.dob || "-"} / ${report.patient.age || "-"}`], ["Sex", report.patient.sex], ["Weight", report.patient.weight], ["Chief complaint", report.patient.chiefComplaint], ["Allergies", report.patient.allergies], ["Current medications", report.patient.medications], ["Past medical history", report.patient.pastMedicalHistory]] },
         { heading: "CAD / response timeline", rows: [["Dispatched", report.times.dispatched], ["En route", report.times.enroute], ["On scene", report.times.onScene], ["Patient contact", report.times.patientContact], ["Depart scene", report.times.departScene], ["At destination", report.times.atDestination], ["Transfer of care", report.times.transferOfCare], ["Available", report.times.available]] },
         { heading: "Assessment findings", rows: [["Mental status", report.assessment.mentalStatus], ["AVPU / GCS", `${report.assessment.avpu || "-"} / ${report.assessment.gcs || "-"}`], ["Airway", report.assessment.airway], ["Breathing", report.assessment.breathing], ["Circulation", report.assessment.circulation], ["Skin", report.assessment.skin], ["Pupils", report.assessment.pupils], ["Lung sounds", report.assessment.lungSounds], ["Pain scale", report.assessment.painScale], ["Primary impression", report.assessment.impression]] },
@@ -320,13 +339,8 @@ async function handler(request, env) {
         { heading: "SAMPLE history", text: report.assessment.sample || "Not documented." },
         { heading: "Physical exam", text: report.assessment.physicalExam || "Not documented." },
         { heading: "Medical Abstract", text: report.narrative.medicalAbstract || "No medical abstract generated." },
-        { heading: "Dispatch narrative", text: report.narrative.dispatch || "Not documented." },
-        { heading: "Arrival narrative", text: report.narrative.arrival || "Not documented." },
-        { heading: "Assessment narrative", text: report.narrative.assessment || "Not documented." },
-        { heading: "Treatment narrative", text: report.narrative.treatment || "Not documented." },
-        { heading: "Transport narrative", text: report.narrative.transport || "Not documented." },
         { heading: "Full narrative", text: report.narrative.full || "No narrative documented." },
-        { heading: "Disposition, transfer & signatures", rows: [["Disposition", disposition.disposition], ["Destination", disposition.destination], ["Transfer of care to", disposition.transferTo], ["Provider signature", disposition.providerSignature], ["Patient signature", disposition.patientSignature], ["Witness signature", disposition.witnessSignature]] },
+        { heading: "Disposition, transfer & signatures", rows: [["Disposition", disposition.disposition || report.incident.callDisposition], ["Destination", disposition.destination], ["Destination type", disposition.destinationType || report.incident.destinationType], ["Transport mode", disposition.transportMode || report.incident.transportMode], ["Receiving facility", disposition.receivingFacility || report.incident.receivingFacility], ["Patient acuity", disposition.patientAcuity || report.incident.patientAcuity], ["Transfer of care to", disposition.transferTo], ["Provider signature", disposition.providerSignature], ["Patient signature", disposition.patientSignature], ["Witness signature", disposition.witnessSignature]] },
         { heading: "QA / approval", items: report.qaComments.length ? report.qaComments.map((q) => [`${q.type || "Comment"} - ${q.author || "Reviewer"}`, q.comment]) : [["QA comments", "No QA comments."]] },
         { heading: "Record attestation", text: "This electronic patient care report documents the information available to the crew at the time of the roleplay/training encounter. Review for completeness, chronology, treatment response, medication checks, reassessment, signatures, and transfer-of-care documentation before final QA approval." },
         { heading: "PCR completion checklist", items: [["Response timeline", "Dispatch, en route, on-scene, patient contact, transport, transfer-of-care, and available times reviewed."], ["Clinical reassessment", "Serial vitals and response to medications/interventions reviewed for consistency."], ["Medication safety", "Indications, contraindication checks, dose, route, time, provider, and patient response reviewed."], ["Disposition", "Destination, transfer-of-care recipient, and electronic signatures reviewed."]] },
@@ -364,6 +378,54 @@ async function handler(request, env) {
     if (parts[2] === "pdf") return new Response(printableHtml("Refusal of Care", row.refusal_id, [{ heading: "Refusal", rows: Object.entries(row.data || {}) }]), { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 
+  if (parts[0] === "settings" && parts[1] === "agencies") {
+    await ensureAgencies(db);
+    if (request.method === "GET") return ok(await db.list("agency_settings", "?select=id,name,active,created_at&order=name.asc"));
+    if (request.method === "POST") {
+      if (user.role !== "Admin") return fail(403, "Admin access required");
+      const body = await request.json();
+      const name = String(body.name || "").trim();
+      if (!name) return fail(400, "Agency name is required");
+      const row = await db.insert("agency_settings", { name, active: true, created_at: now() });
+      await audit(db, user.id, null, "Created agency", name);
+      return ok(row, { status: 201 });
+    }
+  }
+
+  if (parts[0] === "cad" && parts[1] === "units") {
+    if (!["Supervisor", "Admin"].includes(user.role)) return fail(403, "Supervisor access required");
+    if (request.method === "GET") {
+      const rows = await db.list("cad_units", "?select=*&order=unit_number.asc");
+      return ok(rows.map((row) => ({ id: row.id, unitNumber: row.unit_number, label: row.label, agency: row.agency, status: row.status, crew: row.crew || [], updatedAt: row.updated_at })));
+    }
+    if (request.method === "POST") {
+      const body = await request.json();
+      const unitNumber = String(body.unitNumber || "").trim();
+      if (!unitNumber) return fail(400, "Unit number is required");
+      const existing = await db.one("cad_units", `?select=id&unit_number=eq.${encodeURIComponent(unitNumber)}`);
+      const payload = { unit_number: unitNumber, label: body.label || "Ambulance", agency: body.agency || "", status: body.status || "Available", crew: body.crew || [], updated_at: now() };
+      const row = existing ? await db.update("cad_units", `?id=eq.${existing.id}`, payload) : await db.insert("cad_units", payload);
+      await audit(db, user.id, null, "Updated CAD unit", unitNumber);
+      return ok({ id: row.id, unitNumber: row.unit_number, label: row.label, agency: row.agency, status: row.status, crew: row.crew || [], updatedAt: row.updated_at }, { status: 201 });
+    }
+  }
+
+  if (parts[0] === "cad" && parts[1] === "calls") {
+    if (!["Supervisor", "Admin"].includes(user.role)) return fail(403, "Supervisor access required");
+    if (request.method === "GET") {
+      const rows = await db.list("cad_calls", "?select=*&order=updated_at.desc&limit=100");
+      return ok(rows.map((row) => ({ id: row.id, cadNumber: row.cad_number, incidentType: row.incident_type, location: row.location, sceneType: row.scene_type, priority: row.priority, dispatchNotes: row.dispatch_notes, units: row.units || [], status: row.status, createdAt: row.created_at, updatedAt: row.updated_at })));
+    }
+    if (request.method === "POST") {
+      const body = await request.json();
+      const latest = await db.one("cad_calls", "?select=id&order=id.desc&limit=1");
+      const cadNumber = body.cadNumber || `26-${String(Number(latest?.id || 0) + 1).padStart(6, "0")}`;
+      const row = await db.insert("cad_calls", { cad_number: cadNumber, incident_type: body.incidentType || "", location: body.location || "", scene_type: body.sceneType || "", priority: body.priority || "2-Urgent", dispatch_notes: body.dispatchNotes || "", units: body.units || [], status: body.status || "Active", created_at: now(), updated_at: now() });
+      await audit(db, user.id, null, "Created CAD call", cadNumber);
+      return ok({ id: row.id, cadNumber: row.cad_number, incidentType: row.incident_type, location: row.location, sceneType: row.scene_type, priority: row.priority, dispatchNotes: row.dispatch_notes, units: row.units || [], status: row.status, createdAt: row.created_at, updatedAt: row.updated_at }, { status: 201 });
+    }
+  }
+
   if (parts[0] === "audit" && request.method === "GET") {
     if (user.role === "Provider") return fail(403, "Supervisor access required");
     const rows = await db.list("audit_logs", "?select=*&order=created_at.desc&limit=100");
@@ -373,17 +435,22 @@ async function handler(request, env) {
 
   if (parts[0] === "users") {
     if (user.role !== "Admin") return fail(403, "Admin access required");
-    if (parts.length === 1 && request.method === "GET") return ok(await db.list("users", "?select=id,name,username,role,active&order=role.asc,name.asc"));
+    if (parts.length === 1 && request.method === "GET") {
+      const rows = await db.list("users", "?select=id,name,username,role,active,provider_level,agencies&order=role.asc,name.asc");
+      return ok(rows.map((row) => ({ id: row.id, name: row.name, username: row.username, role: row.role, active: row.active, providerLevel: row.provider_level || "EMT", agencies: row.agencies || [] })));
+    }
     const body = await request.json();
     if (parts.length === 1 && request.method === "POST") {
       const name = String(body.name || "").trim();
       const username = String(body.username || "").trim();
       const password = String(body.password || "");
       const role = String(body.role || "");
+      const providerLevel = String(body.providerLevel || (role === "Provider" ? "EMT" : role));
+      const agencies = Array.isArray(body.agencies) ? body.agencies : [];
       if (!name || !/^[A-Za-z0-9_]{3,20}$/.test(username) || password.length < 8 || !["Provider", "Supervisor", "Admin"].includes(role)) return fail(400, "Valid display name, Roblox username, temporary password, and role are required");
-      const created = await db.insert("users", { name, email: `${username.toLowerCase()}@local.invalid`, username, password_hash: await sha256(password), role, active: true });
+      const created = await db.insert("users", { name, email: `${username.toLowerCase()}@local.invalid`, username, password_hash: await sha256(password), role, provider_level: providerLevel, agencies, active: true });
       await audit(db, user.id, null, "Created user", `${username} (${role})`);
-      return ok({ id: created.id, name, username, role, active: true, temporaryPassword: password }, { status: 201 });
+      return ok({ id: created.id, name, username, role, providerLevel, agencies, active: true, temporaryPassword: password }, { status: 201 });
     }
     if (parts[1] && request.method === "PUT") {
       const id = Number(parts[1]);
@@ -394,6 +461,8 @@ async function handler(request, env) {
         username: String(body.username ?? existing.username).trim(),
         email: `${String(body.username ?? existing.username).trim().toLowerCase()}@local.invalid`,
         role: String(body.role ?? existing.role),
+        provider_level: String(body.providerLevel ?? existing.provider_level ?? "EMT"),
+        agencies: Array.isArray(body.agencies) ? body.agencies : (existing.agencies || []),
         active: body.active === undefined ? existing.active : Boolean(body.active),
       };
       if (id === user.id && (!update.active || update.role !== "Admin")) return fail(400, "You cannot remove your own admin access or deactivate your own account");
@@ -401,7 +470,7 @@ async function handler(request, env) {
       if (body.password) update.password_hash = await sha256(body.password);
       const saved = await db.update("users", `?id=eq.${id}`, update);
       await audit(db, user.id, null, body.password ? "Updated user and reset password" : "Updated user", `${saved.username} (${saved.role})`);
-      return ok({ id: saved.id, name: saved.name, username: saved.username, role: saved.role, active: saved.active, temporaryPassword: body.password || undefined });
+      return ok({ id: saved.id, name: saved.name, username: saved.username, role: saved.role, providerLevel: saved.provider_level || "EMT", agencies: saved.agencies || [], active: saved.active, temporaryPassword: body.password || undefined });
     }
   }
 

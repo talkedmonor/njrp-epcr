@@ -3,9 +3,9 @@ import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams }
 import {
   Activity, Ambulance, ArrowLeft, BadgeCheck, Bell, BookOpenCheck, CalendarDays, Check,
   ChevronDown, ChevronRight, ClipboardCheck, ClipboardList, Clock3, FileClock, FilePlus2,
-  FileText, Gauge, History, LayoutDashboard, LockKeyhole, LogOut, Menu, MessageSquareText,
+  FileText, Gauge, History, LayoutDashboard, LockKeyhole, LogOut, MapPin, Menu, MessageSquareText,
   MoreHorizontal, Plus, Printer, RefreshCw, Search, ShieldCheck, Stethoscope, UserRound,
-  UsersRound, UserPlus, KeyRound, Pencil, Trash2, X, XCircle,
+  UsersRound, UserPlus, KeyRound, Pencil, RadioTower, Settings, Trash2, Truck, X, XCircle,
 } from "lucide-react";
 import { clearSession, getSession, request, setSession } from "./api";
 
@@ -20,6 +20,17 @@ const STATUS_META = {
 const blankVitals = { time: "", hr: "", sys: "", dia: "", rr: "", spo2: "", etco2: "", temp: "", bgl: "", pain: "", gcs: "15", rhythm: "NSR", notes: "" };
 const blankMedication = { medication: "", dose: "", route: "IV", time: "", indication: "", contraindications: "Checked", response: "", administeredBy: "", notes: "" };
 const blankIntervention = { intervention: "", time: "", successful: "Yes", performedBy: "", response: "", notes: "" };
+const DEFAULT_AGENCIES = ["Atlantic Mobile Health System", "Trenton Emergency Medical Services", "Virtua Health", "Princeton First Aid and Rescue Squad"];
+const PROVIDER_LEVELS = ["EMR", "EMT", "AEMT", "Paramedic", "RN", "Physician", "Dispatcher", "Supervisor"];
+const CREW_ROLES = ["Primary on-scene provider", "Primary transport provider", "Driver", "Attendant", "Partner", "Supervisor", "Observer", "CAD / Dispatch"];
+const SCENE_TYPES = ["", "9921001-Private residence", "9921003-Street / highway", "9921005-Healthcare facility", "9921007-Public building", "9921009-Industrial / commercial", "9921011-School", "9921013-Outdoor / recreational", "9921015-Other"];
+const CALL_DISPOSITIONS = ["", "4212033-Patient treated and transported", "4212035-Patient treated and released", "4212037-Patient refused care", "4212039-Cancelled en route", "4212041-No patient found", "4212043-Standby only"];
+const PATIENT_ACUITIES = ["", "Critical", "Emergent", "Lower acuity", "Routine", "No patient"];
+const DESTINATION_TYPES = ["", "4225001-Emergency department", "4225003-Trauma center", "4225005-Urgent care", "4225007-Scene release", "4225009-Refusal / no transport"];
+const TRANSPORT_MODES = ["", "4218001-Lights and sirens", "4218003-No lights or sirens", "4218005-Downgraded en route", "4218007-Upgraded en route", "4218009-Not transported"];
+const INCIDENT_TYPES_NEMSIS = ["", "9916001-Chest Pain", "9916003-Difficulty Breathing", "9916005-Fall", "9916007-Motor Vehicle Collision", "9916009-Overdose / Poisoning", "9916011-Behavioral Emergency", "9916013-Sick Person", "9916015-Traumatic Injury", "9916017-Cardiac Arrest"];
+const DEFAULT_RECEIVING_FACILITY = "NJRP Medical Center";
+const blankCrewMember = { name: "", agency: DEFAULT_AGENCIES[0], providerLevel: "EMT", role: "Primary on-scene provider", unit: "" };
 
 async function openAuthenticatedPdf(path) {
   const response = await fetch(path, { headers: { Authorization: `Bearer ${getSession()?.token || ""}` } });
@@ -104,11 +115,13 @@ function Login({ onLogin }) {
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/reports", label: "Reports", icon: ClipboardList },
+  { to: "/cad", label: "CAD / Dispatch", icon: RadioTower, roles: ["Supervisor", "Admin"] },
   { to: "/qa", label: "QA Queue", icon: BookOpenCheck, roles: ["Supervisor", "Admin"] },
   { to: "/refusals", label: "Refusals", icon: XCircle },
   { to: "/search", label: "Search", icon: Search },
   { to: "/audit", label: "Audit Log", icon: History, roles: ["Supervisor", "Admin"] },
   { to: "/users", label: "Users", icon: UsersRound, roles: ["Admin"] },
+  { to: "/settings", label: "Agency Settings", icon: Settings, roles: ["Admin"] },
 ];
 
 function Shell({ session, onLogout, children }) {
@@ -161,7 +174,7 @@ function ReportTable({ reports, compact = false }) {
   const navigate = useNavigate();
   return (
     <div className="table-wrap">
-      <table className={`data-table ${compact ? "compact-table" : ""}`}>
+      <table className={`data-table elite-report-table ${compact ? "compact-table" : ""}`}>
         <thead><tr><th>PCR / CAD</th><th>Patient</th><th>Incident</th><th>Unit</th><th>Provider</th><th>Updated</th><th>Status</th><th /></tr></thead>
         <tbody>
           {reports.map((report) => (
@@ -248,16 +261,50 @@ function SectionCard({ title, description, children, action }) {
 
 function IncidentTab({ report, update, readOnly }) {
   const data = report.incident;
+  const [agencies, setAgencies] = useState(DEFAULT_AGENCIES);
+  const [crewModal, setCrewModal] = useState(false);
+  const [crewEntry, setCrewEntry] = useState(blankCrewMember);
+  useEffect(() => { request("/settings/agencies").then((rows) => setAgencies(rows.filter((agency) => agency.active !== false && agency.active !== 0).map((agency) => agency.name))).catch(() => setAgencies(DEFAULT_AGENCIES)); }, []);
   const set = (key, value) => update("incident", { ...data, [key]: value });
-  return <SectionCard title="Incident information" description="Dispatch and response details for this call.">
-    <Field label="PCR ID" value={report.pcrId} disabled /><Field label="CAD call number" value={data.cadNumber} onChange={(v) => set("cadNumber", v)} disabled={readOnly} />
-    <Field label="Unit" value={data.unit} onChange={(v) => set("unit", v)} disabled={readOnly} /><Field label="Primary provider" value={data.primaryProvider} onChange={(v) => set("primaryProvider", v)} disabled={readOnly} />
-    <Field label="Crew" value={data.crew} onChange={(v) => set("crew", v)} disabled={readOnly} span={2} />
-    <Field label="Agencies on call" value={data.agencies} onChange={(v) => set("agencies", v)} disabled={readOnly} span={2} placeholder="Example: NJRP EMS, County Fire, State Police" />
-    <Field label="Incident type" value={data.incidentType} onChange={(v) => set("incidentType", v)} disabled={readOnly} options={["", "Chest Pain", "Motor Vehicle Collision", "Overdose / Poisoning", "Difficulty Breathing", "Fall", "Behavioral Emergency", "Sick Person", "Traumatic Injury"]} />
-    <Field label="Response priority" value={data.priority} onChange={(v) => set("priority", v)} disabled={readOnly} options={["1-Emergent", "2-Urgent", "3-Routine"]} />
-    <Field label="Incident date" value={data.incidentDate} onChange={(v) => set("incidentDate", v)} disabled={readOnly} type="date" /><Field label="Report status" value={report.status} disabled />
-  </SectionCard>;
+  const addCrew = () => {
+    const clean = { ...crewEntry, agency: crewEntry.agency || agencies[0] || "", providerLevel: crewEntry.providerLevel || "EMT", role: crewEntry.role || CREW_ROLES[0] };
+    const crewMembers = [...(data.crewMembers || []), clean];
+    update("incident", { ...data, crewMembers, crew: crewMembers.map((member) => `${member.name || "Unnamed"} (${member.role || "Crew"})`).join("; ") });
+    setCrewModal(false);
+  };
+  const removeCrew = (index) => {
+    const crewMembers = (data.crewMembers || []).filter((_, i) => i !== index);
+    update("incident", { ...data, crewMembers, crew: crewMembers.map((member) => `${member.name || "Unnamed"} (${member.role || "Crew"})`).join("; ") });
+  };
+  return <>
+    <SectionCard title="Incident information" description="Dispatch and response details for this call.">
+      <Field label="PCR ID" value={report.pcrId} disabled /><Field label="CAD call number" value={data.cadNumber} onChange={(v) => set("cadNumber", v)} disabled={readOnly} placeholder="26-000001 or any local CAD number" />
+      <Field label="Incident location / ERLC postal" value={data.location} onChange={(v) => set("location", v)} disabled={readOnly} span={2} placeholder="Street address, landmark, or ERLC postal code" />
+      <Field label="Dispatch complaint / notes" value={data.dispatch} onChange={(v) => set("dispatch", v)} disabled={readOnly} span={2} placeholder="Optional CAD dispatch text" />
+      <Field label="Unit" value={data.unit} onChange={(v) => set("unit", v)} disabled={readOnly} /><Field label="Primary provider" value={data.primaryProvider} onChange={(v) => set("primaryProvider", v)} disabled={readOnly} />
+      <Field label="Agencies on call" value={data.agencies} onChange={(v) => set("agencies", v)} disabled={readOnly} span={2} placeholder="Example: Atlantic Mobile Health System, Trenton EMS" />
+      <Field label="Incident type" value={data.incidentType} onChange={(v) => set("incidentType", v)} disabled={readOnly} options={INCIDENT_TYPES_NEMSIS} />
+      <Field label="Scene type" value={data.sceneType} onChange={(v) => set("sceneType", v)} disabled={readOnly} options={SCENE_TYPES} />
+      <Field label="Response priority" value={data.priority} onChange={(v) => set("priority", v)} disabled={readOnly} options={["1-Emergent", "2-Urgent", "3-Routine"]} />
+      <Field label="Patient acuity" value={data.patientAcuity} onChange={(v) => set("patientAcuity", v)} disabled={readOnly} options={PATIENT_ACUITIES} />
+      <Field label="Call disposition" value={data.callDisposition} onChange={(v) => set("callDisposition", v)} disabled={readOnly} options={CALL_DISPOSITIONS} />
+      <Field label="Transport mode from scene" value={data.transportMode} onChange={(v) => set("transportMode", v)} disabled={readOnly} options={TRANSPORT_MODES} />
+      <Field label="Destination type" value={data.destinationType} onChange={(v) => set("destinationType", v)} disabled={readOnly} options={DESTINATION_TYPES} />
+      <Field label="Receiving facility" value={data.receivingFacility || DEFAULT_RECEIVING_FACILITY} onChange={(v) => set("receivingFacility", v)} disabled={readOnly} />
+      <Field label="Incident date" value={data.incidentDate} onChange={(v) => set("incidentDate", v)} disabled={readOnly} type="date" /><Field label="Report status" value={report.status} disabled />
+      <div className="crew-roster span-2">
+        <div className="crew-roster-head"><div><strong>Crew member roles</strong><span>Add each provider as a structured Elite-style crew row.</span></div>{!readOnly ? <Button kind="primary" icon={UserPlus} onClick={() => { setCrewEntry({ ...blankCrewMember, agency: agencies[0] || "" }); setCrewModal(true); }}>Add crew</Button> : null}</div>
+        {(data.crewMembers || []).length ? <table><thead><tr><th>Name / Roblox</th><th>Agency</th><th>Level</th><th>Role</th><th>Unit</th>{!readOnly ? <th /> : null}</tr></thead><tbody>{data.crewMembers.map((member, index) => <tr key={`${member.name}-${index}`}><td>{member.name || "—"}</td><td>{member.agency || "—"}</td><td>{member.providerLevel || "—"}</td><td>{member.role || "—"}</td><td>{member.unit || data.unit || "—"}</td>{!readOnly ? <td><button onClick={() => removeCrew(index)}><X size={14} /></button></td> : null}</tr>)}</tbody></table> : <div className="crew-empty">{data.crew ? `Legacy crew text: ${data.crew}` : "No crew members added yet."}</div>}
+      </div>
+    </SectionCard>
+    {crewModal ? <Modal title="Add crew member" saveLabel="Add crew" onClose={() => setCrewModal(false)} onSave={addCrew}><div className="form-grid modal-grid">
+      <Field label="Provider / Roblox username" value={crewEntry.name} onChange={(v) => setCrewEntry({ ...crewEntry, name: v })} />
+      <Field label="Agency" value={crewEntry.agency} onChange={(v) => setCrewEntry({ ...crewEntry, agency: v })} options={["", ...agencies]} />
+      <Field label="Provider level" value={crewEntry.providerLevel} onChange={(v) => setCrewEntry({ ...crewEntry, providerLevel: v })} options={PROVIDER_LEVELS} />
+      <Field label="Crew role" value={crewEntry.role} onChange={(v) => setCrewEntry({ ...crewEntry, role: v })} options={CREW_ROLES} />
+      <Field label="Assigned unit" value={crewEntry.unit} onChange={(v) => setCrewEntry({ ...crewEntry, unit: v })} placeholder={data.unit || "Unit number"} />
+    </div></Modal> : null}
+  </>;
 }
 
 function PatientTab({ report, update, readOnly }) {
@@ -300,8 +347,8 @@ function AssessmentTab({ report, update, readOnly }) {
   </>;
 }
 
-function Modal({ title, children, onClose, onSave }) {
-  return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal"><div className="modal-heading"><div><span className="small-caps">Clinical entry</span><h2>{title}</h2></div><button onClick={onClose}><X /></button></div><div className="modal-body">{children}</div><div className="modal-actions"><Button onClick={onClose}>Cancel</Button><Button kind="primary" icon={Check} onClick={onSave}>Add entry</Button></div></div></div>;
+function Modal({ title, children, onClose, onSave, saveLabel = "Add entry" }) {
+  return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal elite-entry-modal"><div className="modal-heading"><div><span className="small-caps">General Form</span><h2>{title}</h2></div><button onClick={onClose}><X /></button></div><div className="elite-modal-toolbar"><button type="button" onClick={onSave}><Check size={14} />OK</button><button type="button" onClick={onClose}><X size={14} />Cancel</button></div><div className="modal-body">{children}</div><div className="modal-actions"><Button onClick={onClose}>Cancel</Button><Button kind="primary" icon={Check} onClick={onSave}>{saveLabel}</Button></div></div></div>;
 }
 
 function DataTable({ columns, rows, abnormal, empty, onDelete, readOnly }) {
@@ -354,12 +401,12 @@ function NarrativeTab({ report, update, readOnly }) {
     const latest = report.vitals.at(-1) || {};
     const medicationText = report.medications.length ? report.medications.map((m) => `${m.medication} ${m.dose} ${m.route}`).join(", ") : "no medications documented";
     const interventionText = report.interventions.length ? report.interventions.map((i) => i.intervention).join(", ") : "no procedures documented";
-    const abstract = `${report.patient.age || "Unknown-age"} ${report.patient.sex || "patient"} evaluated for ${report.patient.chiefComplaint || report.incident.incidentType || "an EMS complaint"}. Patient was ${report.assessment.mentalStatus || "assessed"} with GCS ${report.assessment.gcs || latest.gcs || "not documented"}, ${report.assessment.airway || "airway status not documented"}, and ${report.assessment.breathing || "breathing status not documented"}. Initial vital signs: BP ${first.sys || "--"}/${first.dia || "--"}, HR ${first.hr || "--"}, RR ${first.rr || "--"}, SpO2 ${first.spo2 || "--"}%. Treatments included ${medicationText}; interventions included ${interventionText}. Latest reassessment: BP ${latest.sys || "--"}/${latest.dia || "--"}, HR ${latest.hr || "--"}, RR ${latest.rr || "--"}, SpO2 ${latest.spo2 || "--"}%, pain ${latest.pain || "--"}/10. Primary impression: ${report.assessment.impression || "not documented"}.`;
+    const crewText = (report.incident.crewMembers || []).length ? report.incident.crewMembers.map((m) => `${m.name || "Crew"} as ${m.role || "crew"} (${m.providerLevel || "level not set"})`).join("; ") : report.incident.crew || "crew not documented";
+    const abstract = `${report.incident.unit || "Unit"} responded ${report.incident.priority || "priority not set"} to ${report.incident.location || "an undocumented location"} for ${report.incident.dispatch || report.patient.chiefComplaint || report.incident.incidentType || "an EMS complaint"}. Scene type ${report.incident.sceneType || "not documented"}; patient acuity ${report.incident.patientAcuity || "not documented"}. Crew: ${crewText}. ${report.patient.age || "Unknown-age"} ${report.patient.sex || "patient"} evaluated for ${report.patient.chiefComplaint || report.incident.incidentType || "EMS complaint"}. Patient was ${report.assessment.mentalStatus || "assessed"} with GCS ${report.assessment.gcs || latest.gcs || "not documented"}, ${report.assessment.airway || "airway status not documented"}, and ${report.assessment.breathing || "breathing status not documented"}. Initial vital signs: BP ${first.sys || "--"}/${first.dia || "--"}, HR ${first.hr || "--"}, RR ${first.rr || "--"}, SpO2 ${first.spo2 || "--"}%. Treatments included ${medicationText}; interventions included ${interventionText}. Latest reassessment: BP ${latest.sys || "--"}/${latest.dia || "--"}, HR ${latest.hr || "--"}, RR ${latest.rr || "--"}, SpO2 ${latest.spo2 || "--"}%, pain ${latest.pain || "--"}/10. Disposition: ${report.incident.callDisposition || "not documented"}; transport mode ${report.incident.transportMode || "not documented"} to ${report.incident.receivingFacility || DEFAULT_RECEIVING_FACILITY}. Primary impression: ${report.assessment.impression || "not documented"}.`;
     set("medicalAbstract", abstract);
   };
   return <SectionCard title="Narrative" description="Build a complete chronological account of assessment, treatment, and transport." action={!readOnly ? <Button icon={Activity} onClick={generateAbstract}>Auto medical abstract</Button> : null}>
     <Field label="Medical abstract" value={data.medicalAbstract} onChange={(v) => set("medicalAbstract", v)} disabled={readOnly} textarea span={2} />
-    {[["dispatch", "Dispatch narrative"], ["arrival", "Arrival narrative"], ["assessment", "Assessment narrative"], ["treatment", "Treatment narrative"], ["transport", "Transport narrative"]].map(([key, label]) => <Field key={key} label={label} value={data[key]} onChange={(v) => set(key, v)} disabled={readOnly} textarea span={2} />)}
     <div className="rich-text span-2"><div className="rich-toolbar"><button><strong>B</strong></button><button><em>I</em></button><button>• List</button><span /> <small>{(data.full || "").length} characters</small></div><textarea value={data.full || ""} disabled={readOnly} onChange={(e) => set("full", e.target.value)} placeholder="Enter the complete patient care narrative…" /></div>
   </SectionCard>;
 }
@@ -370,6 +417,10 @@ function DispositionTab({ report, update, readOnly }) {
   return <SectionCard title="Disposition & signatures" description="Close the encounter and document transfer of care.">
     <Field label="Disposition" value={data.disposition} onChange={(v) => set("disposition", v)} disabled={readOnly} options={["", "Transported", "Treated and released", "Refused care", "Cancelled", "No patient found"]} />
     <Field label="Destination" value={data.destination} onChange={(v) => set("destination", v)} disabled={readOnly} />
+    <Field label="Destination type" value={data.destinationType || report.incident.destinationType} onChange={(v) => set("destinationType", v)} disabled={readOnly} options={DESTINATION_TYPES} />
+    <Field label="Transport mode from scene" value={data.transportMode || report.incident.transportMode} onChange={(v) => set("transportMode", v)} disabled={readOnly} options={TRANSPORT_MODES} />
+    <Field label="Receiving facility" value={data.receivingFacility || report.incident.receivingFacility || DEFAULT_RECEIVING_FACILITY} onChange={(v) => set("receivingFacility", v)} disabled={readOnly} />
+    <Field label="Patient acuity at disposition" value={data.patientAcuity || report.incident.patientAcuity} onChange={(v) => set("patientAcuity", v)} disabled={readOnly} options={PATIENT_ACUITIES} />
     <Field label="Transfer of care to" value={data.transferTo} onChange={(v) => set("transferTo", v)} disabled={readOnly} span={2} />
     {[["providerSignature", "Provider signature"], ["patientSignature", "Patient signature"], ["witnessSignature", "Witness signature"]].map(([key, label]) => <label className="signature-box" key={key}><span>{label}</span><input value={data[key] || ""} disabled={readOnly} onChange={(e) => set(key, e.target.value)} placeholder="Type full legal name" /><small>Electronic signature attestation</small></label>)}
   </SectionCard>;
@@ -552,12 +603,86 @@ function AuditPage() {
   return <><PageHeader title="Audit log" description="Immutable operational history across authentication, documentation, and QA actions." /><section className="panel"><div className="audit-page-list">{items.map((item) => <div key={item.id}><span className="audit-icon"><History size={16} /></span><div><strong>{item.action}</strong><p>{item.detail}</p></div><span>{item.pcr_id || "System"}</span><span>{item.user_name}</span><time>{formatTime(item.created_at)}</time></div>)}</div></section></>;
 }
 
+function CadPage() {
+  const [agencies, setAgencies] = useState(DEFAULT_AGENCIES);
+  const [units, setUnits] = useState([]);
+  const [calls, setCalls] = useState([]);
+  const [unitForm, setUnitForm] = useState({ unitNumber: "", label: "Ambulance", agency: DEFAULT_AGENCIES[0], status: "Available", crewText: "" });
+  const [callForm, setCallForm] = useState({ location: "", incidentType: "", sceneType: "", priority: "2-Urgent", dispatchNotes: "", unitsText: "" });
+  const navigate = useNavigate();
+  const load = useCallback(async () => {
+    const [agencyRows, unitRows, callRows] = await Promise.all([request("/settings/agencies"), request("/cad/units"), request("/cad/calls")]);
+    setAgencies(agencyRows.filter((agency) => agency.active !== false && agency.active !== 0).map((agency) => agency.name));
+    setUnits(unitRows);
+    setCalls(callRows);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const createUnit = async () => {
+    if (!unitForm.unitNumber.trim()) return;
+    await request("/cad/units", { method: "POST", body: JSON.stringify({ ...unitForm, crew: unitForm.crewText.split(",").map((name) => name.trim()).filter(Boolean) }) });
+    setUnitForm({ ...unitForm, unitNumber: "", crewText: "" });
+    load();
+  };
+  const createCall = async () => {
+    const row = await request("/cad/calls", { method: "POST", body: JSON.stringify({ ...callForm, units: callForm.unitsText.split(",").map((unit) => unit.trim()).filter(Boolean) }) });
+    setCallForm({ location: "", incidentType: "", sceneType: "", priority: "2-Urgent", dispatchNotes: "", unitsText: "" });
+    load();
+    return row;
+  };
+  const newPcrFromCall = async (call) => {
+    const report = await request("/reports", { method: "POST", body: JSON.stringify({ incident: { cadNumber: call.cadNumber, location: call.location, incidentType: call.incidentType, sceneType: call.sceneType, priority: call.priority, dispatch: call.dispatchNotes, unit: (call.units || [])[0] || "" } }) });
+    navigate(`/reports/${report.id}`);
+  };
+  return <>
+    <PageHeader title="CAD / dispatch board" description="Create roleplay CAD calls, active units, and dispatch unit groups. CAD numbers auto-generate as 26-XXXXXX, but PCRs still accept any CAD value." actions={<Button kind="primary" icon={RadioTower} onClick={async () => { const call = await createCall(); if (call) load(); }}>Create call</Button>} />
+    <div className="cad-layout">
+      <section className="panel cad-panel"><div className="panel-heading"><div><h2>Active units</h2><p>Unit groups can be selected by number in CAD or manually edited in a PCR.</p></div><Truck size={18} /></div><div className="cad-form">
+        <Field label="Unit number" value={unitForm.unitNumber} onChange={(v) => setUnitForm({ ...unitForm, unitNumber: v })} placeholder="Medic 12" />
+        <Field label="Type / label" value={unitForm.label} onChange={(v) => setUnitForm({ ...unitForm, label: v })} options={["Ambulance", "Medic", "BLS", "Rescue", "Supervisor", "Fly car"]} />
+        <Field label="Agency" value={unitForm.agency} onChange={(v) => setUnitForm({ ...unitForm, agency: v })} options={agencies} />
+        <Field label="Status" value={unitForm.status} onChange={(v) => setUnitForm({ ...unitForm, status: v })} options={["Available", "Dispatched", "En route", "On scene", "Transporting", "At hospital", "Out of service"]} />
+        <Field label="Crew usernames" value={unitForm.crewText} onChange={(v) => setUnitForm({ ...unitForm, crewText: v })} span={2} placeholder="Yoroblox372, ProviderDemo" />
+        <Button kind="primary" icon={Plus} onClick={createUnit}>Add / update unit</Button>
+      </div><div className="unit-grid">{units.map((unit) => <article className="unit-card" key={unit.id}><strong>{unit.unitNumber}</strong><span>{unit.label} • {unit.status}</span><small>{unit.agency}</small><em>{(unit.crew || []).join(", ") || "Crew not assigned"}</em></article>)}</div></section>
+      <section className="panel cad-panel"><div className="panel-heading"><div><h2>Create CAD call</h2><p>Supervisors can keep this open and generate calls for field crews.</p></div><MapPin size={18} /></div><div className="cad-form">
+        <Field label="Location / ERLC postal" value={callForm.location} onChange={(v) => setCallForm({ ...callForm, location: v })} span={2} />
+        <Field label="Incident type" value={callForm.incidentType} onChange={(v) => setCallForm({ ...callForm, incidentType: v })} options={INCIDENT_TYPES_NEMSIS} />
+        <Field label="Scene type" value={callForm.sceneType} onChange={(v) => setCallForm({ ...callForm, sceneType: v })} options={SCENE_TYPES} />
+        <Field label="Priority" value={callForm.priority} onChange={(v) => setCallForm({ ...callForm, priority: v })} options={["1-Emergent", "2-Urgent", "3-Routine"]} />
+        <Field label="Units" value={callForm.unitsText} onChange={(v) => setCallForm({ ...callForm, unitsText: v })} placeholder="Medic 12, BLS 3" />
+        <Field label="Dispatch notes" value={callForm.dispatchNotes} onChange={(v) => setCallForm({ ...callForm, dispatchNotes: v })} textarea span={2} />
+        <Button kind="success" icon={RadioTower} onClick={createCall}>Generate CAD</Button>
+      </div></section>
+      <section className="panel cad-panel cad-calls"><div className="panel-heading"><div><h2>Active CAD calls</h2><p>Open a new PCR from CAD or copy the CAD number into an existing chart.</p></div></div><div className="call-list">{calls.map((call) => <article className="call-card" key={call.id}><div><strong>{call.cadNumber}</strong><StatusBadge status={call.status || "Draft"} /></div><p>{call.incidentType || "Unspecified"} • {call.location || "Location pending"}</p><small>{call.priority} • {(call.units || []).join(", ") || "No units assigned"} • {formatTime(call.updatedAt || call.createdAt)}</small><div className="row-buttons"><Button icon={FilePlus2} onClick={() => newPcrFromCall(call)}>New PCR from CAD</Button><Button icon={ClipboardList} onClick={() => navigator.clipboard?.writeText(call.cadNumber)}>Copy CAD</Button></div></article>)}</div></section>
+    </div>
+  </>;
+}
+
+function SettingsPage() {
+  const [agencies, setAgencies] = useState([]);
+  const [name, setName] = useState("");
+  const load = useCallback(() => request("/settings/agencies").then(setAgencies), []);
+  useEffect(() => { load(); }, [load]);
+  const add = async () => {
+    if (!name.trim()) return;
+    await request("/settings/agencies", { method: "POST", body: JSON.stringify({ name }) });
+    setName("");
+    load();
+  };
+  return <><PageHeader title="Agency settings" description="Configure agencies used by CAD, crew rosters, and user account profiles." actions={<Button kind="primary" icon={Plus} onClick={add}>Add agency</Button>} />
+    <section className="panel settings-panel"><div className="panel-heading"><div><h2>Configured agencies</h2><p>Starter NJRP agencies are seeded automatically; admins can add more.</p></div><ShieldCheck size={18} /></div><div className="cad-form settings-form"><Field label="Agency name" value={name} onChange={setName} span={2} placeholder="Agency / department name" /><Button kind="primary" icon={Plus} onClick={add}>Add agency</Button></div><div className="agency-list">{agencies.map((agency) => <div key={agency.id || agency.name}><strong>{agency.name}</strong><span>{agency.active === false || agency.active === 0 ? "Inactive" : "Active"}</span></div>)}</div></section>
+  </>;
+}
+
 function AccountModal({ user, onClose, onSaved }) {
   const editing = Boolean(user);
-  const [form, setForm] = useState(user ? { ...user, password: "" } : { name: "", username: "", role: "Provider", password: "", active: 1 });
+  const [agencies, setAgencies] = useState(DEFAULT_AGENCIES);
+  const [form, setForm] = useState(user ? { ...user, agencies: user.agencies || [], providerLevel: user.providerLevel || "EMT", password: "" } : { name: "", username: "", role: "Provider", providerLevel: "EMT", agencies: [], password: "", active: 1 });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => { request("/settings/agencies").then((rows) => setAgencies(rows.filter((agency) => agency.active !== false && agency.active !== 0).map((agency) => agency.name))).catch(() => setAgencies(DEFAULT_AGENCIES)); }, []);
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const toggleAgency = (agency) => set("agencies", form.agencies?.includes(agency) ? form.agencies.filter((item) => item !== agency) : [...(form.agencies || []), agency]);
   const save = async () => {
     setBusy(true); setError("");
     try {
@@ -572,7 +697,9 @@ function AccountModal({ user, onClose, onSaved }) {
       <Field label="Full name" value={form.name} onChange={(v) => set("name", v)} />
       <Field label="Roblox username" value={form.username} onChange={(v) => set("username", v)} />
       <Field label="Role" value={form.role} onChange={(v) => set("role", v)} options={["Provider", "Supervisor", "Admin"]} />
+      <Field label="Provider level" value={form.providerLevel} onChange={(v) => set("providerLevel", v)} options={PROVIDER_LEVELS} />
       <Field label={editing ? "Reset password (optional)" : "Temporary password"} value={form.password} onChange={(v) => set("password", v)} type="password" placeholder={editing ? "Leave blank to keep current password" : "Minimum 8 characters"} />
+      <div className="agency-checklist span-2"><span>Agencies</span>{agencies.map((agency) => <label key={agency}><input type="checkbox" checked={(form.agencies || []).includes(agency)} onChange={() => toggleAgency(agency)} />{agency}</label>)}</div>
       {editing ? <label className="account-toggle span-2"><input type="checkbox" checked={Boolean(form.active)} onChange={(e) => set("active", e.target.checked ? 1 : 0)} /><span><strong>Account active</strong><small>Inactive users cannot sign in.</small></span></label> : null}
     </div></div>
     <div className="modal-actions"><Button onClick={onClose}>Cancel</Button><Button kind="primary" icon={editing ? Check : UserPlus} onClick={save} disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Create account"}</Button></div>
@@ -588,7 +715,7 @@ function UsersPage() {
   const saved = async (user) => { setSelected(undefined); setMessage(user.temporaryPassword ? `${user.username} saved. Temporary password: ${user.temporaryPassword}` : `${user.username}'s account was saved.`); await load(); setTimeout(() => setMessage(""), 8000); };
   return <><PageHeader title="User management" description="Create accounts, assign operational roles, reset passwords, and control access." actions={<Button kind="primary" icon={UserPlus} onClick={() => setSelected(null)}>Add user</Button>} />
     {message ? <div className="alert success"><Check size={15} />{message}</div> : null}
-    <section className="panel"><div className="panel-heading user-tools"><div><h2>System users</h2><p>{items.filter((user) => user.active).length} active accounts • changes are written to the audit log</p></div><div className="user-legend"><ShieldCheck size={15} />Admin only</div></div><div className="table-wrap"><table className="data-table users-table"><thead><tr><th>User</th><th>Roblox username</th><th>Role</th><th>Access</th><th>Actions</th></tr></thead><tbody>{items.map((user) => <tr key={user.id}><td><div className="user-cell"><span className="avatar">{user.name.split(" ").map((n) => n[0]).join("")}</span><strong>{user.name}</strong></div></td><td><strong>{user.username}</strong></td><td><span className="role-badge">{user.role}</span></td><td><span className={user.active ? "active-status" : "inactive-status"}><span />{user.active ? "Active" : "Inactive"}</span></td><td><div className="row-buttons"><Button icon={Pencil} onClick={() => setSelected(user)}>Edit</Button><Button icon={KeyRound} onClick={() => setSelected(user)}>Reset password</Button></div></td></tr>)}</tbody></table></div></section>
+    <section className="panel"><div className="panel-heading user-tools"><div><h2>System users</h2><p>{items.filter((user) => user.active).length} active accounts • changes are written to the audit log</p></div><div className="user-legend"><ShieldCheck size={15} />Admin only</div></div><div className="table-wrap"><table className="data-table users-table"><thead><tr><th>User</th><th>Roblox username</th><th>Role</th><th>Level / agencies</th><th>Access</th><th>Actions</th></tr></thead><tbody>{items.map((user) => <tr key={user.id}><td><div className="user-cell"><span className="avatar">{user.name.split(" ").map((n) => n[0]).join("")}</span><strong>{user.name}</strong></div></td><td><strong>{user.username}</strong></td><td><span className="role-badge">{user.role}</span></td><td><strong>{user.providerLevel || "EMT"}</strong><small>{(user.agencies || []).join(", ") || "No agencies set"}</small></td><td><span className={user.active ? "active-status" : "inactive-status"}><span />{user.active ? "Active" : "Inactive"}</span></td><td><div className="row-buttons"><Button icon={Pencil} onClick={() => setSelected(user)}>Edit</Button><Button icon={KeyRound} onClick={() => setSelected(user)}>Reset password</Button></div></td></tr>)}</tbody></table></div></section>
     {selected !== undefined ? <AccountModal user={selected} onClose={() => setSelected(undefined)} onSaved={saved} /> : null}
   </>;
 }
@@ -601,12 +728,14 @@ function App() {
     <Route path="/" element={<Dashboard session={session} />} />
     <Route path="/reports" element={<Reports />} />
     <Route path="/reports/:id" element={<PcrEditor session={session} />} />
+    <Route path="/cad" element={["Supervisor", "Admin"].includes(session.user.role) ? <CadPage /> : <Navigate to="/" />} />
     <Route path="/qa" element={["Supervisor", "Admin"].includes(session.user.role) ? <Reports title="QA review queue" qaOnly /> : <Navigate to="/" />} />
     <Route path="/refusals" element={<Refusals session={session} />} />
     <Route path="/refusals/:id" element={<RefusalEditor session={session} />} />
     <Route path="/search" element={<Reports title="Search reports" />} />
     <Route path="/audit" element={["Supervisor", "Admin"].includes(session.user.role) ? <AuditPage /> : <Navigate to="/" />} />
     <Route path="/users" element={session.user.role === "Admin" ? <UsersPage /> : <Navigate to="/" />} />
+    <Route path="/settings" element={session.user.role === "Admin" ? <SettingsPage /> : <Navigate to="/" />} />
     <Route path="*" element={<Navigate to="/" />} />
   </Routes></Shell>;
 }
