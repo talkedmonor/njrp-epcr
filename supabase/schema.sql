@@ -142,9 +142,9 @@ on conflict (username) do update set
 insert into public.users (name, email, username, password_hash, role, provider_level, agencies, active)
 values
   ('NJRP Master', 'master@njrp.local', 'Yoroblox372', '95d2618158435c9cf2066ac414f5c675bedee1156225f91d34790d09fcf10942', 'Admin', 'Supervisor', '["Atlantic Mobile Health System","Trenton Emergency Medical Services","Virtua Health","Princeton First Aid and Rescue Squad"]'::jsonb, true)
-on conflict (email) do update set
+on conflict (username) do update set
   name = excluded.name,
-  username = excluded.username,
+  email = excluded.email,
   password_hash = excluded.password_hash,
   role = excluded.role,
   provider_level = excluded.provider_level,
