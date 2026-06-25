@@ -151,6 +151,7 @@ db.exec(`
     agency TEXT,
     status TEXT NOT NULL DEFAULT 'Available',
     crew_json TEXT NOT NULL DEFAULT '[]',
+    details_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS cad_calls (
@@ -162,6 +163,7 @@ db.exec(`
     priority TEXT,
     dispatch_notes TEXT,
     units_json TEXT NOT NULL DEFAULT '[]',
+    details_json TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'Active',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -172,6 +174,10 @@ const userColumns = db.prepare("PRAGMA table_info(users)").all().map((column) =>
 if (!userColumns.includes("username")) db.exec("ALTER TABLE users ADD COLUMN username TEXT");
 if (!userColumns.includes("provider_level")) db.exec("ALTER TABLE users ADD COLUMN provider_level TEXT DEFAULT 'EMT'");
 if (!userColumns.includes("agencies_json")) db.exec("ALTER TABLE users ADD COLUMN agencies_json TEXT DEFAULT '[]'");
+const cadUnitColumns = db.prepare("PRAGMA table_info(cad_units)").all().map((column) => column.name);
+if (!cadUnitColumns.includes("details_json")) db.exec("ALTER TABLE cad_units ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'");
+const cadCallColumns = db.prepare("PRAGMA table_info(cad_calls)").all().map((column) => column.name);
+if (!cadCallColumns.includes("details_json")) db.exec("ALTER TABLE cad_calls ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'");
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users(username)");
 const legacyUsers = db.prepare("SELECT id,name,email,username FROM users").all();
 for (const user of legacyUsers) {
@@ -367,9 +373,10 @@ app.post("/api/reports", auth, (req, res) => {
   const seq = db.prepare("SELECT COALESCE(MAX(id),0)+1 AS next FROM pcr_reports").get().next;
   const pcrId = `PCR-2026-${String(10020 + seq).padStart(5, "0")}`;
   const input = req.body?.incident || {};
+  const crewSummary = (input.crewMembers || []).length ? input.crewMembers.map((member) => `${member.name || "Crew"} (${member.role || "Crew"})`).join("; ") : req.user.name;
   const incident = {
     pcrId, cadNumber: input.cadNumber || "", location: input.location || "", dispatch: input.dispatch || "", unit: input.unit || "",
-    crew: req.user.name, crewMembers: input.crewMembers || [], primaryProvider: req.user.name, agencies: input.agencies || (req.user.agencies || []).join(", "),
+    crew: crewSummary, crewMembers: input.crewMembers || [], primaryProvider: req.user.name, agencies: input.agencies || (req.user.agencies || []).join(", "),
     incidentType: input.incidentType || "", sceneType: input.sceneType || "", callDisposition: input.callDisposition || "", patientAcuity: input.patientAcuity || "",
     destinationType: input.destinationType || "", receivingFacility: input.receivingFacility || "NJRP Medical Center", transportMode: input.transportMode || "",
     priority: input.priority || "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft",
@@ -494,36 +501,72 @@ app.post("/api/settings/agencies", auth, (req, res) => {
 
 app.get("/api/cad/units", auth, (req, res) => {
   if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
-  const rows = db.prepare("SELECT id,unit_number AS unitNumber,label,agency,status,crew_json AS crewJson,updated_at AS updatedAt FROM cad_units ORDER BY unit_number").all();
-  res.json(rows.map((row) => ({ ...row, crew: parse(row.crewJson, []), crewJson: undefined })));
+  const rows = db.prepare("SELECT id,unit_number AS unitNumber,label,agency,status,crew_json AS crewJson,details_json AS detailsJson,updated_at AS updatedAt FROM cad_units ORDER BY unit_number").all();
+  res.json(rows.map((row) => ({ ...row, crew: parse(row.crewJson, []), details: parse(row.detailsJson, {}), crewJson: undefined, detailsJson: undefined })));
 });
 
 app.post("/api/cad/units", auth, (req, res) => {
   if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
   const unitNumber = String(req.body.unitNumber || "").trim();
   if (!unitNumber) return res.status(400).json({ error: "Unit number is required" });
-  db.prepare(`INSERT INTO cad_units (unit_number,label,agency,status,crew_json,updated_at) VALUES (?,?,?,?,?,?)
-    ON CONFLICT(unit_number) DO UPDATE SET label=excluded.label,agency=excluded.agency,status=excluded.status,crew_json=excluded.crew_json,updated_at=excluded.updated_at`)
-    .run(unitNumber, req.body.label || "Ambulance", req.body.agency || "", req.body.status || "Available", JSON.stringify(req.body.crew || []), now());
+  db.prepare(`INSERT INTO cad_units (unit_number,label,agency,status,crew_json,details_json,updated_at) VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(unit_number) DO UPDATE SET label=excluded.label,agency=excluded.agency,status=excluded.status,crew_json=excluded.crew_json,details_json=excluded.details_json,updated_at=excluded.updated_at`)
+    .run(unitNumber, req.body.label || "Ambulance", req.body.agency || "", req.body.status || "Available", JSON.stringify(req.body.crew || []), JSON.stringify(req.body.details || {}), now());
   audit(req.user.id, null, "Updated CAD unit", unitNumber);
-  const row = db.prepare("SELECT id,unit_number AS unitNumber,label,agency,status,crew_json AS crewJson,updated_at AS updatedAt FROM cad_units WHERE unit_number=?").get(unitNumber);
-  res.status(201).json({ ...row, crew: parse(row.crewJson, []), crewJson: undefined });
+  const row = db.prepare("SELECT id,unit_number AS unitNumber,label,agency,status,crew_json AS crewJson,details_json AS detailsJson,updated_at AS updatedAt FROM cad_units WHERE unit_number=?").get(unitNumber);
+  res.status(201).json({ ...row, crew: parse(row.crewJson, []), details: parse(row.detailsJson, {}), crewJson: undefined, detailsJson: undefined });
+});
+
+app.put("/api/cad/units/:id", auth, (req, res) => {
+  if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
+  const id = Number(req.params.id);
+  const existing = db.prepare("SELECT * FROM cad_units WHERE id=?").get(id);
+  if (!existing) return res.status(404).json({ error: "Unit not found" });
+  const unitNumber = String(req.body.unitNumber || existing.unit_number).trim();
+  db.prepare("UPDATE cad_units SET unit_number=?,label=?,agency=?,status=?,crew_json=?,details_json=?,updated_at=? WHERE id=?")
+    .run(unitNumber, req.body.label || existing.label || "Ambulance", req.body.agency || "", req.body.status || "Available", JSON.stringify(req.body.crew || []), JSON.stringify(req.body.details || {}), now(), id);
+  audit(req.user.id, null, "Edited CAD unit", unitNumber);
+  const row = db.prepare("SELECT id,unit_number AS unitNumber,label,agency,status,crew_json AS crewJson,details_json AS detailsJson,updated_at AS updatedAt FROM cad_units WHERE id=?").get(id);
+  res.json({ ...row, crew: parse(row.crewJson, []), details: parse(row.detailsJson, {}), crewJson: undefined, detailsJson: undefined });
+});
+
+app.delete("/api/cad/units/:id", auth, (req, res) => {
+  if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
+  const id = Number(req.params.id);
+  const existing = db.prepare("SELECT unit_number FROM cad_units WHERE id=?").get(id);
+  if (!existing) return res.status(404).json({ error: "Unit not found" });
+  db.prepare("DELETE FROM cad_units WHERE id=?").run(id);
+  audit(req.user.id, null, "Deleted CAD unit", existing.unit_number);
+  res.json({ ok: true, deletedId: id });
 });
 
 app.get("/api/cad/calls", auth, (req, res) => {
   if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
-  const rows = db.prepare("SELECT id,cad_number AS cadNumber,incident_type AS incidentType,location,scene_type AS sceneType,priority,dispatch_notes AS dispatchNotes,units_json AS unitsJson,status,created_at AS createdAt,updated_at AS updatedAt FROM cad_calls ORDER BY updated_at DESC LIMIT 100").all();
-  res.json(rows.map((row) => ({ ...row, units: parse(row.unitsJson, []), unitsJson: undefined })));
+  const rows = db.prepare("SELECT id,cad_number AS cadNumber,incident_type AS incidentType,location,scene_type AS sceneType,priority,dispatch_notes AS dispatchNotes,units_json AS unitsJson,details_json AS detailsJson,status,created_at AS createdAt,updated_at AS updatedAt FROM cad_calls ORDER BY updated_at DESC LIMIT 100").all();
+  res.json(rows.map((row) => ({ ...row, units: parse(row.unitsJson, []), details: parse(row.detailsJson, {}), unitsJson: undefined, detailsJson: undefined })));
 });
 
 app.post("/api/cad/calls", auth, (req, res) => {
   if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
   const seq = db.prepare("SELECT COALESCE(MAX(id),0)+1 AS next FROM cad_calls").get().next;
   const cadNumber = req.body.cadNumber || `26-${String(seq).padStart(6, "0")}`;
-  const result = db.prepare(`INSERT INTO cad_calls (cad_number,incident_type,location,scene_type,priority,dispatch_notes,units_json,status,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(cadNumber, req.body.incidentType || "", req.body.location || "", req.body.sceneType || "", req.body.priority || "2-Urgent", req.body.dispatchNotes || "", JSON.stringify(req.body.units || []), req.body.status || "Active", now(), now());
+  const result = db.prepare(`INSERT INTO cad_calls (cad_number,incident_type,location,scene_type,priority,dispatch_notes,units_json,details_json,status,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(cadNumber, req.body.incidentType || "", req.body.location || "", req.body.sceneType || "", req.body.priority || "2-Urgent", req.body.dispatchNotes || "", JSON.stringify(req.body.units || []), JSON.stringify(req.body.details || {}), req.body.status || "Active", now(), now());
   audit(req.user.id, null, "Created CAD call", cadNumber);
-  res.status(201).json({ id: Number(result.lastInsertRowid), cadNumber, incidentType: req.body.incidentType || "", location: req.body.location || "", sceneType: req.body.sceneType || "", priority: req.body.priority || "2-Urgent", dispatchNotes: req.body.dispatchNotes || "", units: req.body.units || [], status: req.body.status || "Active", createdAt: now(), updatedAt: now() });
+  res.status(201).json({ id: Number(result.lastInsertRowid), cadNumber, incidentType: req.body.incidentType || "", location: req.body.location || "", sceneType: req.body.sceneType || "", priority: req.body.priority || "2-Urgent", dispatchNotes: req.body.dispatchNotes || "", units: req.body.units || [], details: req.body.details || {}, status: req.body.status || "Active", createdAt: now(), updatedAt: now() });
+});
+
+app.put("/api/cad/calls/:id", auth, (req, res) => {
+  if (!["Supervisor", "Admin"].includes(req.user.role)) return res.status(403).json({ error: "Supervisor access required" });
+  const id = Number(req.params.id);
+  const existing = db.prepare("SELECT * FROM cad_calls WHERE id=?").get(id);
+  if (!existing) return res.status(404).json({ error: "Call not found" });
+  const cadNumber = String(req.body.cadNumber || existing.cad_number).trim();
+  db.prepare("UPDATE cad_calls SET cad_number=?,incident_type=?,location=?,scene_type=?,priority=?,dispatch_notes=?,units_json=?,details_json=?,status=?,updated_at=? WHERE id=?")
+    .run(cadNumber, req.body.incidentType || "", req.body.location || "", req.body.sceneType || "", req.body.priority || "2-Urgent", req.body.dispatchNotes || "", JSON.stringify(req.body.units || []), JSON.stringify(req.body.details || {}), req.body.status || existing.status || "Active", now(), id);
+  audit(req.user.id, null, req.body.status === "Closed" ? "Closed CAD call" : "Edited CAD call", cadNumber);
+  const row = db.prepare("SELECT id,cad_number AS cadNumber,incident_type AS incidentType,location,scene_type AS sceneType,priority,dispatch_notes AS dispatchNotes,units_json AS unitsJson,details_json AS detailsJson,status,created_at AS createdAt,updated_at AS updatedAt FROM cad_calls WHERE id=?").get(id);
+  res.json({ ...row, units: parse(row.unitsJson, []), details: parse(row.detailsJson, {}), unitsJson: undefined, detailsJson: undefined });
 });
 
 app.get("/api/audit", auth, (req, res) => {

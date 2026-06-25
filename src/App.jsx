@@ -603,12 +603,19 @@ function AuditPage() {
   return <><PageHeader title="Audit log" description="Immutable operational history across authentication, documentation, and QA actions." /><section className="panel"><div className="audit-page-list">{items.map((item) => <div key={item.id}><span className="audit-icon"><History size={16} /></span><div><strong>{item.action}</strong><p>{item.detail}</p></div><span>{item.pcr_id || "System"}</span><span>{item.user_name}</span><time>{formatTime(item.created_at)}</time></div>)}</div></section></>;
 }
 
+const blankUnitForm = { id: null, unitNumber: "", label: "Ambulance", agency: DEFAULT_AGENCIES[0], status: "Available", station: "", district: "", vehicleId: "", radioChannel: "", capabilities: "", notes: "", crewText: "", crewRole: "Primary transport provider", crewProviderLevel: "EMT" };
+const blankCallForm = { id: null, cadNumber: "", location: "", crossStreet: "", caller: "", callback: "", incidentType: "", sceneType: "", priority: "2-Urgent", patientAcuity: "", callDisposition: "", transportMode: "", destinationType: "", receivingFacility: DEFAULT_RECEIVING_FACILITY, dispatchNotes: "", unitsText: "", status: "Active" };
+const splitCsv = (value) => String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+const crewToText = (crew = []) => crew.map((member) => typeof member === "string" ? member : member.name).filter(Boolean).join(", ");
+const unitToForm = (unit) => ({ ...blankUnitForm, id: unit.id, unitNumber: unit.unitNumber || "", label: unit.label || "Ambulance", agency: unit.agency || "", status: unit.status || "Available", crewText: crewToText(unit.crew), crewRole: unit.crew?.[0]?.role || "Primary transport provider", crewProviderLevel: unit.crew?.[0]?.providerLevel || "EMT", ...(unit.details || {}) });
+const callToForm = (call) => ({ ...blankCallForm, id: call.id, cadNumber: call.cadNumber || "", location: call.location || "", incidentType: call.incidentType || "", sceneType: call.sceneType || "", priority: call.priority || "2-Urgent", dispatchNotes: call.dispatchNotes || "", unitsText: (call.units || []).join(", "), status: call.status || "Active", ...(call.details || {}) });
+
 function CadPage() {
   const [agencies, setAgencies] = useState(DEFAULT_AGENCIES);
   const [units, setUnits] = useState([]);
   const [calls, setCalls] = useState([]);
-  const [unitForm, setUnitForm] = useState({ unitNumber: "", label: "Ambulance", agency: DEFAULT_AGENCIES[0], status: "Available", crewText: "" });
-  const [callForm, setCallForm] = useState({ location: "", incidentType: "", sceneType: "", priority: "2-Urgent", dispatchNotes: "", unitsText: "" });
+  const [unitForm, setUnitForm] = useState(blankUnitForm);
+  const [callForm, setCallForm] = useState(blankCallForm);
   const navigate = useNavigate();
   const load = useCallback(async () => {
     const [agencyRows, unitRows, callRows] = await Promise.all([request("/settings/agencies"), request("/cad/units"), request("/cad/calls")]);
@@ -617,43 +624,77 @@ function CadPage() {
     setCalls(callRows);
   }, []);
   useEffect(() => { load(); }, [load]);
-  const createUnit = async () => {
+  const saveUnit = async () => {
     if (!unitForm.unitNumber.trim()) return;
-    await request("/cad/units", { method: "POST", body: JSON.stringify({ ...unitForm, crew: unitForm.crewText.split(",").map((name) => name.trim()).filter(Boolean) }) });
-    setUnitForm({ ...unitForm, unitNumber: "", crewText: "" });
-    load();
+    const crew = splitCsv(unitForm.crewText).map((name) => ({ name, agency: unitForm.agency, providerLevel: unitForm.crewProviderLevel, role: unitForm.crewRole, unit: unitForm.unitNumber }));
+    const details = { station: unitForm.station, district: unitForm.district, vehicleId: unitForm.vehicleId, radioChannel: unitForm.radioChannel, capabilities: unitForm.capabilities, notes: unitForm.notes };
+    await request(unitForm.id ? `/cad/units/${unitForm.id}` : "/cad/units", { method: unitForm.id ? "PUT" : "POST", body: JSON.stringify({ unitNumber: unitForm.unitNumber, label: unitForm.label, agency: unitForm.agency, status: unitForm.status, crew, details }) });
+    setUnitForm({ ...blankUnitForm, agency: agencies[0] || DEFAULT_AGENCIES[0] });
+    await load();
   };
-  const createCall = async () => {
-    const row = await request("/cad/calls", { method: "POST", body: JSON.stringify({ ...callForm, units: callForm.unitsText.split(",").map((unit) => unit.trim()).filter(Boolean) }) });
-    setCallForm({ location: "", incidentType: "", sceneType: "", priority: "2-Urgent", dispatchNotes: "", unitsText: "" });
-    load();
+  const deleteUnit = async (unit) => {
+    if (!window.confirm(`Delete unit ${unit.unitNumber}?`)) return;
+    await request(`/cad/units/${unit.id}`, { method: "DELETE" });
+    if (unitForm.id === unit.id) setUnitForm({ ...blankUnitForm, agency: agencies[0] || DEFAULT_AGENCIES[0] });
+    await load();
+  };
+  const saveCall = async () => {
+    const details = { crossStreet: callForm.crossStreet, caller: callForm.caller, callback: callForm.callback, patientAcuity: callForm.patientAcuity, callDisposition: callForm.callDisposition, transportMode: callForm.transportMode, destinationType: callForm.destinationType, receivingFacility: callForm.receivingFacility };
+    const payload = { cadNumber: callForm.cadNumber, location: callForm.location, incidentType: callForm.incidentType, sceneType: callForm.sceneType, priority: callForm.priority, dispatchNotes: callForm.dispatchNotes, units: splitCsv(callForm.unitsText), details, status: callForm.status || "Active" };
+    const row = await request(callForm.id ? `/cad/calls/${callForm.id}` : "/cad/calls", { method: callForm.id ? "PUT" : "POST", body: JSON.stringify(payload) });
+    setCallForm(blankCallForm);
+    await load();
     return row;
   };
+  const closeCall = async (call) => {
+    await request(`/cad/calls/${call.id}`, { method: "PUT", body: JSON.stringify({ ...call, status: "Closed", details: call.details || {} }) });
+    if (callForm.id === call.id) setCallForm(blankCallForm);
+    await load();
+  };
   const newPcrFromCall = async (call) => {
-    const report = await request("/reports", { method: "POST", body: JSON.stringify({ incident: { cadNumber: call.cadNumber, location: call.location, incidentType: call.incidentType, sceneType: call.sceneType, priority: call.priority, dispatch: call.dispatchNotes, unit: (call.units || [])[0] || "" } }) });
+    const assignedUnits = units.filter((unit) => (call.units || []).includes(unit.unitNumber));
+    const crewMembers = assignedUnits.flatMap((unit) => (unit.crew || []).map((member) => typeof member === "string" ? { name: member, agency: unit.agency, providerLevel: "EMT", role: "Crew member", unit: unit.unitNumber } : { ...member, agency: member.agency || unit.agency, unit: member.unit || unit.unitNumber }));
+    const report = await request("/reports", { method: "POST", body: JSON.stringify({ incident: { cadNumber: call.cadNumber, location: call.location, incidentType: call.incidentType, sceneType: call.sceneType, priority: call.priority, dispatch: call.dispatchNotes, unit: (call.units || [])[0] || "", agencies: [...new Set(assignedUnits.map((unit) => unit.agency).filter(Boolean))].join(", "), crewMembers, patientAcuity: call.details?.patientAcuity || "", callDisposition: call.details?.callDisposition || "", transportMode: call.details?.transportMode || "", destinationType: call.details?.destinationType || "", receivingFacility: call.details?.receivingFacility || DEFAULT_RECEIVING_FACILITY } }) });
     navigate(`/reports/${report.id}`);
   };
   return <>
-    <PageHeader title="CAD / dispatch board" description="Create roleplay CAD calls, active units, and dispatch unit groups. CAD numbers auto-generate as 26-XXXXXX, but PCRs still accept any CAD value." actions={<Button kind="primary" icon={RadioTower} onClick={async () => { const call = await createCall(); if (call) load(); }}>Create call</Button>} />
+    <PageHeader title="CAD / dispatch board" description="Edit active calls, manage units, close dispatches, and open PCRs with crew/provider details already attached." actions={<><Button icon={RefreshCw} onClick={load}>Refresh</Button><Button kind="primary" icon={RadioTower} onClick={saveCall}>{callForm.id ? "Save call" : "Create call"}</Button></>} />
     <div className="cad-layout">
       <section className="panel cad-panel"><div className="panel-heading"><div><h2>Active units</h2><p>Unit groups can be selected by number in CAD or manually edited in a PCR.</p></div><Truck size={18} /></div><div className="cad-form">
         <Field label="Unit number" value={unitForm.unitNumber} onChange={(v) => setUnitForm({ ...unitForm, unitNumber: v })} placeholder="Medic 12" />
         <Field label="Type / label" value={unitForm.label} onChange={(v) => setUnitForm({ ...unitForm, label: v })} options={["Ambulance", "Medic", "BLS", "Rescue", "Supervisor", "Fly car"]} />
         <Field label="Agency" value={unitForm.agency} onChange={(v) => setUnitForm({ ...unitForm, agency: v })} options={agencies} />
         <Field label="Status" value={unitForm.status} onChange={(v) => setUnitForm({ ...unitForm, status: v })} options={["Available", "Dispatched", "En route", "On scene", "Transporting", "At hospital", "Out of service"]} />
+        <Field label="Station / post" value={unitForm.station} onChange={(v) => setUnitForm({ ...unitForm, station: v })} placeholder="Station 1" />
+        <Field label="District / response area" value={unitForm.district} onChange={(v) => setUnitForm({ ...unitForm, district: v })} placeholder="North / ERLC sector" />
+        <Field label="Vehicle ID" value={unitForm.vehicleId} onChange={(v) => setUnitForm({ ...unitForm, vehicleId: v })} placeholder="AMB-12" />
+        <Field label="Radio channel" value={unitForm.radioChannel} onChange={(v) => setUnitForm({ ...unitForm, radioChannel: v })} placeholder="EMS Ops 1" />
+        <Field label="Crew provider level" value={unitForm.crewProviderLevel} onChange={(v) => setUnitForm({ ...unitForm, crewProviderLevel: v })} options={PROVIDER_LEVELS} />
+        <Field label="Default crew role" value={unitForm.crewRole} onChange={(v) => setUnitForm({ ...unitForm, crewRole: v })} options={CREW_ROLES} />
         <Field label="Crew usernames" value={unitForm.crewText} onChange={(v) => setUnitForm({ ...unitForm, crewText: v })} span={2} placeholder="Yoroblox372, ProviderDemo" />
-        <Button kind="primary" icon={Plus} onClick={createUnit}>Add / update unit</Button>
-      </div><div className="unit-grid">{units.map((unit) => <article className="unit-card" key={unit.id}><strong>{unit.unitNumber}</strong><span>{unit.label} • {unit.status}</span><small>{unit.agency}</small><em>{(unit.crew || []).join(", ") || "Crew not assigned"}</em></article>)}</div></section>
-      <section className="panel cad-panel"><div className="panel-heading"><div><h2>Create CAD call</h2><p>Supervisors can keep this open and generate calls for field crews.</p></div><MapPin size={18} /></div><div className="cad-form">
+        <Field label="Capabilities / equipment" value={unitForm.capabilities} onChange={(v) => setUnitForm({ ...unitForm, capabilities: v })} span={2} placeholder="ALS, BLS, bariatric, supervisor, rescue tools" />
+        <Field label="Unit notes" value={unitForm.notes} onChange={(v) => setUnitForm({ ...unitForm, notes: v })} textarea span={2} />
+        <div className="row-buttons span-2"><Button kind="primary" icon={unitForm.id ? Check : Plus} onClick={saveUnit}>{unitForm.id ? "Save unit changes" : "Add unit"}</Button>{unitForm.id ? <Button icon={X} onClick={() => setUnitForm({ ...blankUnitForm, agency: agencies[0] || DEFAULT_AGENCIES[0] })}>Clear edit</Button> : null}</div>
+      </div><div className="unit-grid">{units.map((unit) => <article className="unit-card" key={unit.id}><strong>{unit.unitNumber}</strong><span>{unit.label} • {unit.status}</span><small>{unit.agency}</small><em>{crewToText(unit.crew) || "Crew not assigned"}</em><small>{[unit.details?.station, unit.details?.district, unit.details?.radioChannel].filter(Boolean).join(" • ")}</small><div className="row-buttons"><Button icon={Pencil} onClick={() => setUnitForm(unitToForm(unit))}>Edit</Button><Button kind="danger" icon={Trash2} onClick={() => deleteUnit(unit)}>Delete</Button></div></article>)}</div></section>
+      <section className="panel cad-panel"><div className="panel-heading"><div><h2>{callForm.id ? `Editing ${callForm.cadNumber}` : "Create CAD call"}</h2><p>Supervisors can keep this open and generate calls for field crews.</p></div><MapPin size={18} /></div><div className="cad-form">
+        <Field label="CAD number" value={callForm.cadNumber} onChange={(v) => setCallForm({ ...callForm, cadNumber: v })} placeholder="Blank auto-generates 26-XXXXXX" />
+        <Field label="Call status" value={callForm.status} onChange={(v) => setCallForm({ ...callForm, status: v })} options={["Active", "Dispatched", "En route", "On scene", "Transporting", "At hospital", "Closed"]} />
         <Field label="Location / ERLC postal" value={callForm.location} onChange={(v) => setCallForm({ ...callForm, location: v })} span={2} />
+        <Field label="Cross street / landmark" value={callForm.crossStreet} onChange={(v) => setCallForm({ ...callForm, crossStreet: v })} />
+        <Field label="Caller / callback" value={callForm.caller} onChange={(v) => setCallForm({ ...callForm, caller: v })} placeholder="RP name / callback" />
         <Field label="Incident type" value={callForm.incidentType} onChange={(v) => setCallForm({ ...callForm, incidentType: v })} options={INCIDENT_TYPES_NEMSIS} />
         <Field label="Scene type" value={callForm.sceneType} onChange={(v) => setCallForm({ ...callForm, sceneType: v })} options={SCENE_TYPES} />
         <Field label="Priority" value={callForm.priority} onChange={(v) => setCallForm({ ...callForm, priority: v })} options={["1-Emergent", "2-Urgent", "3-Routine"]} />
+        <Field label="Patient acuity" value={callForm.patientAcuity} onChange={(v) => setCallForm({ ...callForm, patientAcuity: v })} options={PATIENT_ACUITIES} />
         <Field label="Units" value={callForm.unitsText} onChange={(v) => setCallForm({ ...callForm, unitsText: v })} placeholder="Medic 12, BLS 3" />
+        <Field label="Call disposition" value={callForm.callDisposition} onChange={(v) => setCallForm({ ...callForm, callDisposition: v })} options={CALL_DISPOSITIONS} />
+        <Field label="Transport mode" value={callForm.transportMode} onChange={(v) => setCallForm({ ...callForm, transportMode: v })} options={TRANSPORT_MODES} />
+        <Field label="Destination type" value={callForm.destinationType} onChange={(v) => setCallForm({ ...callForm, destinationType: v })} options={DESTINATION_TYPES} />
+        <Field label="Receiving facility" value={callForm.receivingFacility} onChange={(v) => setCallForm({ ...callForm, receivingFacility: v })} />
         <Field label="Dispatch notes" value={callForm.dispatchNotes} onChange={(v) => setCallForm({ ...callForm, dispatchNotes: v })} textarea span={2} />
-        <Button kind="success" icon={RadioTower} onClick={createCall}>Generate CAD</Button>
+        <div className="row-buttons span-2"><Button kind="success" icon={RadioTower} onClick={saveCall}>{callForm.id ? "Save dispatch" : "Generate CAD"}</Button>{callForm.id ? <Button icon={X} onClick={() => setCallForm(blankCallForm)}>Clear edit</Button> : null}</div>
       </div></section>
-      <section className="panel cad-panel cad-calls"><div className="panel-heading"><div><h2>Active CAD calls</h2><p>Open a new PCR from CAD or copy the CAD number into an existing chart.</p></div></div><div className="call-list">{calls.map((call) => <article className="call-card" key={call.id}><div><strong>{call.cadNumber}</strong><StatusBadge status={call.status || "Draft"} /></div><p>{call.incidentType || "Unspecified"} • {call.location || "Location pending"}</p><small>{call.priority} • {(call.units || []).join(", ") || "No units assigned"} • {formatTime(call.updatedAt || call.createdAt)}</small><div className="row-buttons"><Button icon={FilePlus2} onClick={() => newPcrFromCall(call)}>New PCR from CAD</Button><Button icon={ClipboardList} onClick={() => navigator.clipboard?.writeText(call.cadNumber)}>Copy CAD</Button></div></article>)}</div></section>
+      <section className="panel cad-panel cad-calls"><div className="panel-heading"><div><h2>CAD calls</h2><p>Edit dispatches, close calls, or open a PCR with CAD/unit/crew details prefilled.</p></div></div><div className="call-list">{calls.map((call) => <article className={`call-card ${call.status === "Closed" ? "closed" : ""}`} key={call.id}><div><strong>{call.cadNumber}</strong><StatusBadge status={call.status || "Draft"} /></div><p>{call.incidentType || "Unspecified"} • {call.location || "Location pending"}</p><small>{call.priority} • {(call.units || []).join(", ") || "No units assigned"} • {call.details?.patientAcuity || "Acuity pending"} • {formatTime(call.updatedAt || call.createdAt)}</small><small>{[call.details?.crossStreet, call.details?.caller, call.dispatchNotes].filter(Boolean).join(" • ")}</small><div className="row-buttons"><Button icon={Pencil} onClick={() => setCallForm(callToForm(call))}>Edit</Button><Button icon={FilePlus2} onClick={() => newPcrFromCall(call)}>New PCR</Button>{call.status !== "Closed" ? <Button kind="dark" icon={Check} onClick={() => closeCall(call)}>Close</Button> : null}<Button icon={ClipboardList} onClick={() => navigator.clipboard?.writeText(call.cadNumber)}>Copy CAD</Button></div></article>)}</div></section>
     </div>
   </>;
 }

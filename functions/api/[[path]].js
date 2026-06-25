@@ -250,9 +250,10 @@ async function handler(request, env) {
     const latest = await db.one("pcr_reports", "?select=id&order=id.desc&limit=1");
     const seq = Number(latest?.id || 0) + 1;
     const pcrId = `PCR-2026-${String(10020 + seq).padStart(5, "0")}`;
+    const crewSummary = (input.crewMembers || []).length ? input.crewMembers.map((member) => `${member.name || "Crew"} (${member.role || "Crew"})`).join("; ") : user.name;
     const incident = {
       pcrId, cadNumber: input.cadNumber || "", location: input.location || "", dispatch: input.dispatch || "", unit: input.unit || "",
-      crew: user.name, crewMembers: input.crewMembers || [], primaryProvider: user.name, agencies: input.agencies || (user.agencies || []).join(", "),
+      crew: crewSummary, crewMembers: input.crewMembers || [], primaryProvider: user.name, agencies: input.agencies || (user.agencies || []).join(", "),
       incidentType: input.incidentType || "", sceneType: input.sceneType || "", callDisposition: input.callDisposition || "", patientAcuity: input.patientAcuity || "",
       destinationType: input.destinationType || "", receivingFacility: input.receivingFacility || "NJRP Medical Center", transportMode: input.transportMode || "",
       priority: input.priority || "2-Urgent", incidentDate: new Date().toISOString().slice(0, 10), status: "Draft",
@@ -394,35 +395,63 @@ async function handler(request, env) {
 
   if (parts[0] === "cad" && parts[1] === "units") {
     if (!["Supervisor", "Admin"].includes(user.role)) return fail(403, "Supervisor access required");
-    if (request.method === "GET") {
+    if (parts.length === 2 && request.method === "GET") {
       const rows = await db.list("cad_units", "?select=*&order=unit_number.asc");
-      return ok(rows.map((row) => ({ id: row.id, unitNumber: row.unit_number, label: row.label, agency: row.agency, status: row.status, crew: row.crew || [], updatedAt: row.updated_at })));
+      return ok(rows.map((row) => ({ id: row.id, unitNumber: row.unit_number, label: row.label, agency: row.agency, status: row.status, crew: row.crew || [], details: row.details || {}, updatedAt: row.updated_at })));
     }
-    if (request.method === "POST") {
+    if (parts.length === 2 && request.method === "POST") {
       const body = await request.json();
       const unitNumber = String(body.unitNumber || "").trim();
       if (!unitNumber) return fail(400, "Unit number is required");
       const existing = await db.one("cad_units", `?select=id&unit_number=eq.${encodeURIComponent(unitNumber)}`);
-      const payload = { unit_number: unitNumber, label: body.label || "Ambulance", agency: body.agency || "", status: body.status || "Available", crew: body.crew || [], updated_at: now() };
+      const payload = { unit_number: unitNumber, label: body.label || "Ambulance", agency: body.agency || "", status: body.status || "Available", crew: body.crew || [], details: body.details || {}, updated_at: now() };
       const row = existing ? await db.update("cad_units", `?id=eq.${existing.id}`, payload) : await db.insert("cad_units", payload);
       await audit(db, user.id, null, "Updated CAD unit", unitNumber);
-      return ok({ id: row.id, unitNumber: row.unit_number, label: row.label, agency: row.agency, status: row.status, crew: row.crew || [], updatedAt: row.updated_at }, { status: 201 });
+      return ok({ id: row.id, unitNumber: row.unit_number, label: row.label, agency: row.agency, status: row.status, crew: row.crew || [], details: row.details || {}, updatedAt: row.updated_at }, { status: 201 });
+    }
+    if (parts[2] && request.method === "PUT") {
+      const body = await request.json();
+      const id = Number(parts[2]);
+      const existing = await db.one("cad_units", `?select=*&id=eq.${id}`);
+      if (!existing) return fail(404, "Unit not found");
+      const payload = { unit_number: String(body.unitNumber || existing.unit_number).trim(), label: body.label || "Ambulance", agency: body.agency || "", status: body.status || "Available", crew: body.crew || [], details: body.details || {}, updated_at: now() };
+      const row = await db.update("cad_units", `?id=eq.${id}`, payload);
+      await audit(db, user.id, null, "Edited CAD unit", payload.unit_number);
+      return ok({ id: row.id, unitNumber: row.unit_number, label: row.label, agency: row.agency, status: row.status, crew: row.crew || [], details: row.details || {}, updatedAt: row.updated_at });
+    }
+    if (parts[2] && request.method === "DELETE") {
+      const id = Number(parts[2]);
+      const existing = await db.one("cad_units", `?select=*&id=eq.${id}`);
+      if (!existing) return fail(404, "Unit not found");
+      await db.delete("cad_units", `?id=eq.${id}`);
+      await audit(db, user.id, null, "Deleted CAD unit", existing.unit_number);
+      return ok({ ok: true, deletedId: id });
     }
   }
 
   if (parts[0] === "cad" && parts[1] === "calls") {
     if (!["Supervisor", "Admin"].includes(user.role)) return fail(403, "Supervisor access required");
-    if (request.method === "GET") {
+    if (parts.length === 2 && request.method === "GET") {
       const rows = await db.list("cad_calls", "?select=*&order=updated_at.desc&limit=100");
-      return ok(rows.map((row) => ({ id: row.id, cadNumber: row.cad_number, incidentType: row.incident_type, location: row.location, sceneType: row.scene_type, priority: row.priority, dispatchNotes: row.dispatch_notes, units: row.units || [], status: row.status, createdAt: row.created_at, updatedAt: row.updated_at })));
+      return ok(rows.map((row) => ({ id: row.id, cadNumber: row.cad_number, incidentType: row.incident_type, location: row.location, sceneType: row.scene_type, priority: row.priority, dispatchNotes: row.dispatch_notes, units: row.units || [], details: row.details || {}, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at })));
     }
-    if (request.method === "POST") {
+    if (parts.length === 2 && request.method === "POST") {
       const body = await request.json();
       const latest = await db.one("cad_calls", "?select=id&order=id.desc&limit=1");
       const cadNumber = body.cadNumber || `26-${String(Number(latest?.id || 0) + 1).padStart(6, "0")}`;
-      const row = await db.insert("cad_calls", { cad_number: cadNumber, incident_type: body.incidentType || "", location: body.location || "", scene_type: body.sceneType || "", priority: body.priority || "2-Urgent", dispatch_notes: body.dispatchNotes || "", units: body.units || [], status: body.status || "Active", created_at: now(), updated_at: now() });
+      const row = await db.insert("cad_calls", { cad_number: cadNumber, incident_type: body.incidentType || "", location: body.location || "", scene_type: body.sceneType || "", priority: body.priority || "2-Urgent", dispatch_notes: body.dispatchNotes || "", units: body.units || [], details: body.details || {}, status: body.status || "Active", created_at: now(), updated_at: now() });
       await audit(db, user.id, null, "Created CAD call", cadNumber);
-      return ok({ id: row.id, cadNumber: row.cad_number, incidentType: row.incident_type, location: row.location, sceneType: row.scene_type, priority: row.priority, dispatchNotes: row.dispatch_notes, units: row.units || [], status: row.status, createdAt: row.created_at, updatedAt: row.updated_at }, { status: 201 });
+      return ok({ id: row.id, cadNumber: row.cad_number, incidentType: row.incident_type, location: row.location, sceneType: row.scene_type, priority: row.priority, dispatchNotes: row.dispatch_notes, units: row.units || [], details: row.details || {}, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at }, { status: 201 });
+    }
+    if (parts[2] && request.method === "PUT") {
+      const body = await request.json();
+      const id = Number(parts[2]);
+      const existing = await db.one("cad_calls", `?select=*&id=eq.${id}`);
+      if (!existing) return fail(404, "Call not found");
+      const payload = { cad_number: String(body.cadNumber || existing.cad_number).trim(), incident_type: body.incidentType || "", location: body.location || "", scene_type: body.sceneType || "", priority: body.priority || "2-Urgent", dispatch_notes: body.dispatchNotes || "", units: body.units || [], details: body.details || {}, status: body.status || existing.status || "Active", updated_at: now() };
+      const row = await db.update("cad_calls", `?id=eq.${id}`, payload);
+      await audit(db, user.id, null, payload.status === "Closed" ? "Closed CAD call" : "Edited CAD call", payload.cad_number);
+      return ok({ id: row.id, cadNumber: row.cad_number, incidentType: row.incident_type, location: row.location, sceneType: row.scene_type, priority: row.priority, dispatchNotes: row.dispatch_notes, units: row.units || [], details: row.details || {}, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at });
     }
   }
 
